@@ -1,0 +1,384 @@
+{
+  "$schema": "https://pocmap.ai/schemas/playbook-v1.json",
+  "name": "Rapid Response Playbook",
+  "description": "Emergency response workflow for newly dropped critical CVEs. Designed for speed - go from CVE announcement to bug bounty submission in minimum time.",
+  "version": "1.0.0",
+  "author": "PocMap AI Bug Bounty Toolkit",
+  "created": "2024-01-01",
+  "difficulty": "intermediate",
+  "estimated_time_hours": "2-6",
+  "trigger_conditions": [
+    "New CVE with CVSS >= 9.0 announced",
+    "CVE added to CISA KEV catalog",
+    "EPSS score jumps above 0.8",
+    "Twitter/infosec community buzzing about new exploit",
+    "Rapid increase in exploitation attempts detected (GreyNoise, etc.)"
+  ],
+  "prerequisites": [
+    "Pre-configured scope files for active programs",
+    "PocMap AI API key ready",
+    "Burp Suite configured with target scope",
+    "Slack/Discord webhook configured for notifications",
+    "Docker lab environment templates ready"
+  ],
+  "goal": "Submit bug bounty report for critical CVE within 2-6 hours of disclosure",
+  "phases": [
+    {
+      "phase_id": "1",
+      "name": "Triage (0-15 minutes)",
+      "description": "Rapid assessment of CVE potential",
+      "estimated_time_minutes": 15,
+      "steps": [
+        {
+          "step_id": "1.1",
+          "description": "Get CVE details via PocMap AI",
+          "action": "Query AI for CVE summary, affected products, CVSS, EPSS, and exploit availability",
+          "tools": ["pocmap"],
+          "command": "pocmap lookup --cve {{CVE_ID}} --full",
+          "output": "cve_summary.json",
+          "priority": "P0",
+          "time_limit_minutes": 2,
+          "tips": "This should take under 60 seconds. The AI aggregates from multiple sources instantly.",
+          "go_no_go_criteria": {
+            "GO": "CVSS >= 7.0 AND exploit_available = true",
+            "NO_GO": "CVSS < 4.0 OR no affected products in active scope",
+            "CONDITIONAL": "CVSS 4.0-7.0 with high EPSS - evaluate further"
+          }
+        },
+        {
+          "step_id": "1.2",
+          "description": "Quick scope match",
+          "action": "Check if affected product is in any active bug bounty scope",
+          "tools": ["pocmap scope-manager"],
+          "command": "python -c \"from pocmap.bugbounty.scope_manager import ScopeManager; sm = ScopeManager(); sm.import_scope('scope.json'); print(sm.match_cves_to_scope([cve_data]))\"",
+          "output": "scope_match_result",
+          "priority": "P0",
+          "time_limit_minutes": 3,
+          "tips": "Pre-load all scope files at toolkit init for instant matching.",
+          "abort_if": "No scope match found"
+        },
+        {
+          "step_id": "1.3",
+          "description": "Calculate priority score",
+          "action": "Run composite scoring to rank against other opportunities",
+          "tools": ["pocmap prioritization"],
+          "command": "python -c \"from pocmap.bugbounty.prioritization import calculate_composite_score; print(calculate_composite_score(cve_data))\"",
+          "output": "priority score (0-100)",
+          "priority": "P0",
+          "time_limit_minutes": 1,
+          "decision_matrix": {
+            "score_90_100": "DROP EVERYTHING - Proceed immediately",
+            "score_75_89": "HIGH priority - Start within 1 hour",
+            "score_60_74": "MEDIUM - Queue for today",
+            "score_below_60": "LOW - Add to backlog"
+          }
+        },
+        {
+          "step_id": "1.4",
+          "description": "Send team notification",
+          "action": "Alert via configured webhooks about new critical CVE",
+          "tools": ["pocmap automation"],
+          "command": "python -c \"from pocmap.bugbounty.automation import NotificationManager; n = NotificationManager(); n.add_slack_webhook('{{WEBHOOK_URL}}'); n.notify_critical_cve(cve_data)\"",
+          "output": "sent notification",
+          "priority": "P1",
+          "time_limit_minutes": 1,
+          "tips": "Notifications keep your team synchronized and prevent duplicate work."
+        }
+      ]
+    },
+    {
+      "phase_id": "2",
+      "name": "Exploit Acquisition (15-45 minutes)",
+      "description": "Get working exploit as fast as possible",
+      "estimated_time_minutes": 30,
+      "steps": [
+        {
+          "step_id": "2.1",
+          "description": "Get exploit from PocMap AI",
+          "action": "Request PoC/exploit from AI service",
+          "tools": ["pocmap"],
+          "command": "pocmap exploit --cve {{CVE_ID}} --output exploit/",
+          "output": "exploit code files",
+          "priority": "P0",
+          "time_limit_minutes": 5,
+          "tips": "PocMap AI may have non-public PoCs. This is your fastest source.",
+          "fallback": "If AI has no exploit, proceed to step 2.2 immediately"
+        },
+        {
+          "step_id": "2.2",
+          "description": "Search GitHub for PoCs",
+          "action": "Search GitHub for newly published exploit code",
+          "tools": ["github", "curl"],
+          "command": "curl -s 'https://api.github.com/search/repositories?q=CVE-2021-44228+exploit&sort=updated&order=desc' | jq '.items[:5] | .[].html_url'",
+          "output": "github repo URLs",
+          "priority": "P0",
+          "time_limit_minutes": 5,
+          "tips": "Sort by 'updated' to find newest repos. Check stars, forks, and recency.",
+          "quality_checks": [
+            "Repo created recently (last 7 days)",
+            "Has README with usage instructions",
+            "Code is readable (not obfuscated)",
+            "No suspicious network calls or encoded payloads"
+          ]
+        },
+        {
+          "step_id": "2.3",
+          "description": "Search Exploit-DB",
+          "action": "Check Exploit-DB for verified exploits",
+          "tools": ["exploitdb", "searchsploit"],
+          "command": "searchsploit --cve {{CVE_ID}} --json",
+          "output": "exploitdb entries",
+          "priority": "P1",
+          "time_limit_minutes": 3,
+          "tips": "Exploit-DB verified exploits are reliable but may lag behind GitHub by hours."
+        },
+        {
+          "step_id": "2.4",
+          "description": "Review and select best exploit",
+          "action": "Compare available exploits and select the most reliable",
+          "tools": ["code review"],
+          "output": "selected_exploit.py",
+          "priority": "P0",
+          "time_limit_minutes": 10,
+          "selection_criteria": [
+            "Most recently updated",
+            "Clear documentation",
+            "Safe/test mode available",
+            "Doesn't require exotic dependencies",
+            "Code is readable and auditable"
+          ],
+          "security_checks": [
+            "No hardcoded callbacks to unknown domains",
+            "No encoded/encrypted payload sections",
+            "No requests to unexpected URLs",
+            "Open source (not binary blobs)"
+          ]
+        }
+      ]
+    },
+    {
+      "phase_id": "3",
+      "name": "Rapid Validation (45-90 minutes)",
+      "description": "Validate exploit and collect evidence",
+      "estimated_time_minutes": 45,
+      "steps": [
+        {
+          "step_id": "3.1",
+          "description": "Deploy lab environment",
+          "action": "Spin up matching vulnerable environment in Docker",
+          "tools": ["docker"],
+          "command": "docker run -d --name cve-test -p 8080:80 vuln-app:{{VERSION}}",
+          "output": "container_id",
+          "priority": "P0",
+          "time_limit_minutes": 5,
+          "tips": "Have pre-built Docker images for common stacks. Use docker-compose for complex multi-service targets.",
+          "prebuilt_images": [
+            "vulhub/vulhub:latest - Extensive CVE collection",
+            "vulnerables/web-dvwa:latest - Testing environment",
+            "Custom images built from vendor Dockerfiles"
+          ]
+        },
+        {
+          "step_id": "3.2",
+          "description": "Run exploit against lab",
+          "action": "Execute PoC in safe mode against lab",
+          "tools": ["python", "curl"],
+          "command": "python selected_exploit.py --target http://localhost:8080 --safe-mode",
+          "output": "exploit result / evidence",
+          "priority": "P0",
+          "time_limit_minutes": 10,
+          "tips": "Use DNS callback (interactsh.io) or sleep-based detection for safe validation. Never use destructive payloads in lab.",
+          "abort_if": "Exploit fails in lab - may need adaptation or target mismatch"
+        },
+        {
+          "step_id": "3.3",
+          "description": "Test against target (minimal payload)",
+          "action": "Carefully validate against in-scope target",
+          "tools": ["burp-suite", "proxy"],
+          "command": "python selected_exploit.py --target {{TARGET_URL}} --minimal --proxy http://127.0.0.1:8080",
+          "output": "target validation evidence",
+          "priority": "P0",
+          "time_limit_minutes": 15,
+          "rules_of_engagement": [
+            "ALL traffic goes through Burp proxy",
+            "Use minimal detection payload only",
+            "Stop if unexpected errors occur",
+            "Have program authorization ready",
+            "Do NOT access, modify, or delete data",
+            "Time-box to 15 minutes maximum"
+          ],
+          "safety_checklist": [
+            "Proxy is intercepting and logging?",
+            "Payload is safe/minimal?",
+            "Authorization confirmed?",
+            "Timer set for 15 minutes?",
+            "Team knows you're testing?"
+          ]
+        },
+        {
+          "step_id": "3.4",
+          "description": "Collect evidence rapidly",
+          "action": "Gather proof: screenshots, requests, responses",
+          "tools": ["burp-suite", "screenshot tool"],
+          "output": "evidence/ directory",
+          "priority": "P0",
+          "time_limit_minutes": 10,
+          "required_evidence": [
+            "Burp proxy HTTP request showing payload",
+            "Burp proxy HTTP response showing vulnerability",
+            "Screenshot of exploit result",
+            "Terminal output showing successful execution"
+          ],
+          "tips": "Export Burp state file. Screenshot everything. Use asciinema for terminal recordings."
+        }
+      ]
+    },
+    {
+      "phase_id": "4",
+      "name": "Speed Report (90-150 minutes)",
+      "description": "Generate and submit report as fast as possible",
+      "estimated_time_minutes": 60,
+      "steps": [
+        {
+          "step_id": "4.1",
+          "description": "Auto-generate report draft",
+          "action": "Use PocMap AI to draft initial report",
+          "tools": ["pocmap templates"],
+          "command": "python -c \"from pocmap.bugbounty.automation import ReportDrafter; d = ReportDrafter(); print(d.draft_report(cve_data, 'hackerone', impact='{{IMPACT}}', steps='{{STEPS}}'))\" > report.md",
+          "output": "report.md",
+          "priority": "P0",
+          "time_limit_minutes": 5,
+          "tips": "The AI-generated draft includes all CVE details. You only need to add your specific impact and steps."
+        },
+        {
+          "step_id": "4.2",
+          "description": "Add your evidence",
+          "action": "Insert screenshots, request/response pairs, and PoC code",
+          "tools": ["text editor"],
+          "output": "enhanced report.md",
+          "priority": "P0",
+          "time_limit_minutes": 15,
+          "speed_tips": [
+            "Use markdown image syntax: ![evidence](screenshot1.png)",
+            "Copy-paste HTTP requests from Burp",
+            "Include PoC code as code block",
+            "Keep descriptions concise - triagers are busy"
+          ]
+        },
+        {
+          "step_id": "4.3",
+          "description": "CVSS scoring (use calculator)",
+          "action": "Score with first.org calculator, paste result with justification",
+          "tools": ["first.org/cvss/calculator"],
+          "output": "CVSS section",
+          "priority": "P0",
+          "time_limit_minutes": 10,
+          "speed_tips": [
+            "Use the online calculator - it's fastest",
+            "Copy-paste the vector string",
+            "One-line justification per metric is enough for speed reports",
+            "Example: 'AV:N - Vulnerable endpoint is network-accessible without authentication'"
+          ]
+        },
+        {
+          "step_id": "4.4",
+          "description": "Quick proofread and submit",
+          "action": "Final check and platform submission",
+          "tools": ["browser"],
+          "output": "submission confirmation",
+          "priority": "P0",
+          "time_limit_minutes": 10,
+          "final_checklist": [
+            "Title is clear and descriptive?",
+            "Executive summary explains impact?",
+            "Steps are reproducible?",
+            "Evidence is attached?",
+            "CVSS is calculated?",
+            "Remediation is suggested?",
+            "No typos in critical fields?"
+          ]
+        }
+      ]
+    },
+    {
+      "phase_id": "5",
+      "name": "Post-Submission (150-180 minutes)",
+      "description": "Follow-up and monitoring after submission",
+      "estimated_time_minutes": 30,
+      "steps": [
+        {
+          "step_id": "5.1",
+          "description": "Record submission details",
+          "action": "Log submission ID, timestamp, and target",
+          "tools": ["spreadsheet", "notes"],
+          "output": "submission_log entry",
+          "priority": "P1",
+          "template": {
+            "submission_id": "",
+            "program": "",
+            "cve_id": "",
+            "severity": "",
+            "submitted_at": "",
+            "estimated_bounty": "",
+            "status": "submitted"
+          }
+        },
+        {
+          "step_id": "5.2",
+          "description": "Set follow-up reminder",
+          "action": "Calendar reminder for triage follow-up",
+          "tools": ["calendar"],
+          "output": "calendar reminder",
+          "priority": "P1",
+          "follow_up_timeline": {
+            "day_1_3": "Normal triage window",
+            "day_5": "Polite follow-up if no response",
+            "day_10": "Escalation follow-up",
+            "day_14": "Consider public disclosure timeline"
+          }
+        },
+        {
+          "step_id": "5.3",
+          "description": "Monitor for duplicates",
+          "action": "Watch program disclosures and HackerOne Hacktivity",
+          "tools": ["hackerone hacktivity", "twitter"],
+          "output": "duplicate awareness",
+          "priority": "P2",
+          "tips": "If duplicates appear, your response speed becomes important for partial credit."
+        },
+        {
+          "step_id": "5.4",
+          "description": "Update internal tracking",
+          "action": "Update assessment results and scope files",
+          "tools": ["pocmap automation"],
+          "output": "updated tracking files",
+          "priority": "P2",
+          "tips": "This CVE is now 'known' - remove from active monitoring or lower priority."
+        }
+      ]
+    }
+  ],
+  "time_budget": {
+    "triage": "0-15 min",
+    "exploit_acquisition": "15-45 min",
+    "validation": "45-90 min",
+    "reporting": "90-150 min",
+    "post_submission": "150-180 min",
+    "total_target": "2-3 hours (experienced)",
+    "total_realistic": "4-6 hours (typical)"
+  },
+  "speed_optimization": {
+    "pre_staged_scope": "Have scope.json files ready for all active programs",
+    "pre_configured_webhooks": "Notifications set up before CVE drops",
+    "lab_templates": "Docker Compose files for common stacks pre-built",
+    "hotkey_shortcuts": "Burp Suite project templates with target scope pre-configured",
+    "report_templates": "Platform-specific templates with researcher info pre-filled",
+    "cve_cache": "Keep local cache of recent CVE lookups for instant retrieval"
+  },
+  "risk_mitigation": {
+    "speed_vs_quality": "Don't sacrifice evidence quality for speed. A rejected report wastes all time.",
+    "authorization": "Never test without confirmed authorization. Speed doesn't excuse policy violations.",
+    "safety": "Minimal payloads only. No data access, modification, or deletion.",
+    "ethics": "Report only what you can prove. Exaggeration damages credibility."
+  }
+}

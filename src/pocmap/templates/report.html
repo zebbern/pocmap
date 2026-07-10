@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PocMap Report</title>
+    <style>
+        * {{ box-sizing: border-box; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 2rem; background: #f8f9fa; color: #1a1a2e; }}
+        h1 {{ color: #1a1a2e; border-bottom: 3px solid #e94560; padding-bottom: 0.5rem; }}
+        .meta {{ color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }}
+        .table-wrap {{ overflow-x: auto; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
+        table {{ border-collapse: collapse; width: 100%; background: white; }}
+        thead th {{ background: #1a1a2e; color: white; text-align: left; padding: 0.75rem 1rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap; position: sticky; top: 0; }}
+        tbody td {{ padding: 0.65rem 1rem; border-bottom: 1px solid #eaecef; font-size: 0.88rem; vertical-align: top; }}
+        tbody tr:nth-child(even) {{ background: #fbfbfc; }}
+        tbody tr:hover {{ background: #fff5f7; }}
+        tbody tr:last-child td {{ border-bottom: none; }}
+        .badge {{ padding: 0.25rem 0.75rem; border-radius: 999px; font-size: 0.85rem; font-weight: 600; display: inline-block; white-space: nowrap; }}
+        .badge.yes {{ background: #d4edda; color: #155724; }}
+        .badge.no {{ background: #f8d7da; color: #721c24; }}
+        .severity-critical {{ background: #dc3545; color: white; }}
+        .severity-high {{ background: #fd7e14; color: white; }}
+        .severity-medium {{ background: #ffc107; color: #212529; }}
+        .severity-low {{ background: #28a745; color: white; }}
+        .severity-unknown {{ background: #6c757d; color: white; }}
+        a {{ color: #e94560; text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+    </style>
+</head>
+<body>
+    <h1>PocMap Report</h1>
+    <p class="meta">Generated on {report_date} at {report_time}</p>
+    <div class="table-wrap">
+        <table id="report">
+            <thead>
+                <tr>
+                    <th>CVE ID</th>
+                    <th>Severity</th>
+                    <th>CVSS</th>
+                    <th>EPSS</th>
+                    <th>KEV</th>
+                    <th>Description</th>
+                    <th>GitHub PoC</th>
+                    <th>ExploitDB</th>
+                    <th>Metasploit</th>
+                    <th>Nuclei</th>
+                    <th>Labs</th>
+                    <th>Bug Bounty</th>
+                    <th>References</th>
+                </tr>
+            </thead>
+            <tbody>
+                {body_rows}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>

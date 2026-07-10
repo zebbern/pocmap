@@ -1,0 +1,208 @@
+{
+  "name": "PocMap",
+  "version": "2.0.0",
+  "description": "MCP Server for CVE lookup, exploit discovery, and vulnerability reporting. Enables AI agents to search for CVE details, find PoCs from GitHub/Metasploit/ExploitDB/Nuclei, discover bug bounty reports, find CTF labs, and generate vulnerability reports.",
+  "author": "PocMap Team",
+  "license": "MIT",
+  "entry_points": {
+    "stdio": {
+      "command": "python",
+      "args": ["-m", "mcp_transport_stdio"],
+      "description": "STDIO transport for Claude Desktop and local MCP clients",
+      "env": {}
+    },
+    "sse": {
+      "command": "python",
+      "args": ["-m", "mcp_transport_sse"],
+      "description": "SSE transport for remote access and browser-based clients",
+      "env": {
+        "POCMAP_HOST": "127.0.0.1",
+        "POCMAP_PORT": "8000"
+      }
+    }
+  },
+  "claude_desktop": {
+    "command": "python",
+    "args": ["{SERVER_DIR}/mcp_transport_stdio.py"],
+    "description": "Configuration for Claude Desktop integration"
+  },
+  "resources": {
+    "cve://{cve_id}": {
+      "name": "cve_info",
+      "mime_type": "text/plain",
+      "description": "Full CVE information including description, CVSS scores, EPSS, KEV status, CWEs, references, and affected vendor/product"
+    },
+    "exploits://{cve_id}": {
+      "name": "cve_exploits",
+      "mime_type": "text/plain",
+      "description": "Complete list of available exploits and PoCs for a CVE from all sources (GitHub, Metasploit, ExploitDB, Nuclei)"
+    },
+    "report://{cve_id}": {
+      "name": "cve_report",
+      "mime_type": "application/json",
+      "description": "Generated vulnerability report for a CVE including CVE info, exploits, labs, and bug bounty reports"
+    }
+  },
+  "tools": {
+    "lookup_cve": {
+      "description": "Look up detailed CVE information from NVD and enrichment sources",
+      "input_schema": {
+        "cve_id": "string - The CVE identifier (e.g. 'CVE-2021-44228')"
+      },
+      "output_schema": "string - Formatted CVE information text"
+    },
+    "get_epss_score": {
+      "description": "Get the EPSS probability score for a CVE",
+      "input_schema": {
+        "cve_id": "string - The CVE identifier"
+      },
+      "output_schema": "string - EPSS score with risk level"
+    },
+    "check_kev_status": {
+      "description": "Check if a CVE is in the CISA KEV catalog",
+      "input_schema": {
+        "cve_id": "string - The CVE identifier"
+      },
+      "output_schema": "string - KEV catalog status"
+    },
+    "find_github_pocs": {
+      "description": "Find GitHub PoC repositories for a CVE",
+      "input_schema": {
+        "cve_id": "string - The CVE identifier",
+        "limit": "integer - Max results (default: 10)"
+      },
+      "output_schema": "string - Formatted list of GitHub PoCs"
+    },
+    "find_metasploit_module": {
+      "description": "Find a Metasploit module for a CVE",
+      "input_schema": {
+        "cve_id": "string - The CVE identifier"
+      },
+      "output_schema": "string - Metasploit module info or not-found message"
+    },
+    "find_exploitdb_entry": {
+      "description": "Find an ExploitDB entry for a CVE",
+      "input_schema": {
+        "cve_id": "string - The CVE identifier"
+      },
+      "output_schema": "string - ExploitDB entry info or not-found message"
+    },
+    "find_nuclei_template": {
+      "description": "Find a Nuclei vulnerability scanner template for a CVE",
+      "input_schema": {
+        "cve_id": "string - The CVE identifier"
+      },
+      "output_schema": "string - Nuclei template info or not-found message"
+    },
+    "find_bug_bounty_reports": {
+      "description": "Find bug bounty reports and write-ups for a CVE",
+      "input_schema": {
+        "cve_id": "string - The CVE identifier"
+      },
+      "output_schema": "string - Formatted list of bug bounty reports"
+    },
+    "find_practice_labs": {
+      "description": "Find CTF labs and practice environments for a CVE",
+      "input_schema": {
+        "cve_id": "string - The CVE identifier"
+      },
+      "output_schema": "string - Formatted list of lab environments"
+    },
+    "find_vulhub_docker": {
+      "description": "Find a Vulhub Docker environment for a CVE",
+      "input_schema": {
+        "cve_id": "string - The CVE identifier"
+      },
+      "output_schema": "string - Vulhub Docker URL and setup instructions"
+    },
+    "cve_to_cpe": {
+      "description": "Convert a CVE to its associated CPEs",
+      "input_schema": {
+        "cve_id": "string - The CVE identifier"
+      },
+      "output_schema": "string - Formatted list of CPE information"
+    },
+    "cpe_to_cve": {
+      "description": "Convert a CPE to its associated CVEs",
+      "input_schema": {
+        "cpe": "string - CPE 2.3 URI or simplified product identifier"
+      },
+      "output_schema": "string - Formatted list of CVE identifiers"
+    },
+    "generate_json_report": {
+      "description": "Generate a comprehensive JSON vulnerability report for one or more CVEs",
+      "input_schema": {
+        "cve_ids": "string - Comma-separated list of CVE identifiers"
+      },
+      "output_schema": "string - JSON-formatted vulnerability report"
+    },
+    "generate_html_report": {
+      "description": "Generate a comprehensive HTML vulnerability report for one or more CVEs",
+      "input_schema": {
+        "cve_ids": "string - Comma-separated list of CVE identifiers"
+      },
+      "output_schema": "string - HTML-formatted vulnerability report"
+    },
+    "discover_product_cves": {
+      "description": "Discover CVEs affecting a product by name and version (supports aliases)",
+      "input_schema": {
+        "product": "string - Product name (e.g. 'Apache Struts'); aliases supported",
+        "version": "string - Optional version filter (e.g. '2.x', '2.14.1')",
+        "vendor": "string - Optional vendor name for disambiguation",
+        "limit": "integer - Max CVEs to analyze (default: 50)"
+      },
+      "output_schema": "string - CVEs grouped into confirmed/possibly-affected/not-enough-data"
+    },
+    "find_recent_exploits": {
+      "description": "Discover recently published CVEs with exploit intelligence and filters",
+      "input_schema": {
+        "since": "string - Relative window: 1h, 24h, 7d, 30d (default: 24h)",
+        "from_date": "string - Start date YYYY-MM-DD (overrides since)",
+        "to_date": "string - End date YYYY-MM-DD",
+        "only_with_poc": "boolean - Only CVEs with known PoCs",
+        "kev_only": "boolean - Only CISA KEV entries",
+        "min_epss": "number - Minimum EPSS score on a 0-100 scale",
+        "severity": "string - Comma-separated: critical,high,medium,low",
+        "sort": "string - Sort by cve_date, severity, or epss",
+        "limit": "integer - Max results (default: 50)"
+      },
+      "output_schema": "string - JSON list of recent CVEs with metadata"
+    },
+    "get_cve_assessment_playbook": {
+      "description": "Retrieve the structured CVE assessment playbook",
+      "input_schema": {},
+      "output_schema": "string - JSON playbook with phases and steps"
+    },
+    "get_rapid_response_playbook": {
+      "description": "Retrieve the rapid-response playbook for critical/zero-day CVEs",
+      "input_schema": {},
+      "output_schema": "string - JSON playbook with phases and steps"
+    },
+    "get_bug_bounty_playbook": {
+      "description": "Retrieve the bug bounty submission playbook",
+      "input_schema": {},
+      "output_schema": "string - JSON playbook with phases and steps"
+    }
+  },
+  "prompts": {
+    "vulnerability_assessment": {
+      "description": "Structured vulnerability assessment workflow for analyzing CVEs",
+      "arguments": ["cve_id"],
+      "use_case": "Comprehensive CVE analysis with risk scoring and remediation recommendations"
+    },
+    "exploit_research": {
+      "description": "Deep exploit research prompt for analyzing exploit code and building detection rules",
+      "arguments": ["cve_id", "focus_area"],
+      "use_case": "Technical exploit analysis with detection engineering focus"
+    },
+    "bug_bounty_analysis": {
+      "description": "Analyze bug bounty reports to extract exploitation techniques and security lessons",
+      "arguments": ["cve_id"],
+      "use_case": "Real-world impact analysis from bug bounty write-ups"
+    }
+  },
+  "dependencies": {
+    "python": ">=3.10",
+    "packages": ["mcp>=1.0.0", "pydantic>=2.0.0"]
+  }
+}

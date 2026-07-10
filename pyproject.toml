@@ -1,0 +1,111 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pocmap"
+dynamic = ["version"]
+description = "A modern, AI-friendly CVE PoC discovery tool with structured data models"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "PocMap Contributors"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    "requests>=2.28",
+    "urllib3>=2.0",
+    "typer>=0.9",
+    "rich>=13.0",
+    "beautifulsoup4>=4.12",
+    "markdown>=3.5",
+    "jinja2>=3.0",
+    "tomli>=2.0; python_version<'3.11'",
+    "typing_extensions>=4.0; python_version<'3.11'",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "mypy>=1.5",
+    "ruff>=0.1",
+    "types-beautifulsoup4",
+    "types-requests",
+]
+async = [
+    "aiohttp>=3.9",
+    "aiosignal>=1.3",
+]
+server = [
+    "mcp>=1.2",
+]
+
+[project.scripts]
+pocmap = "pocmap.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/zebbern/pocmap"
+Documentation = "https://github.com/zebbern/pocmap#readme"
+Repository = "https://github.com/zebbern/pocmap"
+Issues = "https://github.com/zebbern/pocmap/issues"
+
+[tool.setuptools.dynamic]
+version = {attr = "pocmap.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pocmap = ["data/*", "templates/*.html", "bugbounty/playbooks/*.json", "py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+
+# Third-party / conditional imports that ship no type stubs. `markdown` has no
+# published stubs; `tomli`/`tomllib` are the optional TOML backends used by
+# lab_service (tomllib is stdlib only on 3.11+, below our 3.10 mypy target).
+[[tool.mypy.overrides]]
+module = ["markdown", "tomli", "tomllib", "mcp.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-m 'not network'"
+markers = [
+    "network: tests that make live network calls (deselected by default)",
+]

@@ -1,0 +1,549 @@
+{
+  "$schema": "https://pocmap.ai/schemas/playbook-v1.json",
+  "name": "Bug Bounty Submission Playbook",
+  "description": "Complete workflow from validated finding to successful bug bounty submission. Covers all major platforms with platform-specific guidance.",
+  "version": "1.0.0",
+  "author": "PocMap AI Bug Bounty Toolkit",
+  "created": "2024-01-01",
+  "difficulty": "beginner",
+  "estimated_time_hours": "2-4",
+  "trigger_conditions": [
+    "Vulnerability has been validated with working PoC",
+    "Target is confirmed in-scope",
+    "Evidence has been collected",
+    "You are ready to submit"
+  ],
+  "prerequisites": [
+    "Bug bounty program account created",
+    "Program scope reviewed",
+    "Vulnerability confirmed exploitable",
+    "Evidence collected (screenshots, HTTP logs, PoC code)",
+    "CVSS score calculated"
+  ],
+  "supported_platforms": {
+    "hackerone": {
+      "format": "markdown",
+      "max_attachment_size": "50MB",
+      "supports_video": true,
+      "public_disclosure": true,
+      "tip": "HackerOne values detailed technical reports with clear reproduction steps."
+    },
+    "bugcrowd": {
+      "format": "structured_form + markdown",
+      "max_attachment_size": "25MB",
+      "supports_video": true,
+      "public_disclosure": false,
+      "tip": "Bugcrowd has a structured form. Fill all fields completely. Markdown attachments are supported."
+    },
+    "intigriti": {
+      "format": "markdown",
+      "max_attachment_size": "25MB",
+      "supports_video": true,
+      "public_disclosure": true,
+      "tip": "Intigriti values clear, concise reports. European companies prefer formal language."
+    },
+    "synack": {
+      "format": "structured_form",
+      "max_attachment_size": "10MB",
+      "supports_video": false,
+      "public_disclosure": false,
+      "tip": "Synack requires SRT certification. Reports are vetted by leadership before client submission."
+    }
+  },
+  "phases": [
+    {
+      "phase_id": "1",
+      "name": "Pre-Submission Checklist",
+      "description": "Verify everything is ready before writing the report",
+      "estimated_time_minutes": 15,
+      "steps": [
+        {
+          "step_id": "1.1",
+          "description": "Verify target is in-scope",
+          "action": "Double-check the vulnerable asset against program scope",
+          "tools": ["scope file", "program page"],
+          "checklist": [
+            "Domain is explicitly in-scope or matches wildcard?",
+            "Vulnerability type is not excluded?",
+            "No pre-approval required for this finding type?",
+            "Out-of-scope list doesn't exclude this asset?"
+          ],
+          "priority": "P0",
+          "failure_action": "DO NOT PROCEED. Out-of-scope submissions damage reputation and may violate policy."
+        },
+        {
+          "step_id": "1.2",
+          "description": "Gather all evidence",
+          "action": "Collect and organize evidence files",
+          "tools": ["file manager"],
+          "required_evidence": [
+            {
+              "type": "HTTP request/response",
+              "description": "Burp/ZAP saved request showing payload and vulnerable response",
+              "format": "Burp state file OR raw text",
+              "mandatory": true
+            },
+            {
+              "type": "Screenshot",
+              "description": "Visual proof of vulnerability",
+              "format": "PNG/JPG",
+              "mandatory": true,
+              "annotations": "Highlight key areas with arrows/circles"
+            },
+            {
+              "type": "Video/GIF",
+              "description": "For complex multi-step vulnerabilities",
+              "format": "MP4/GIF",
+              "mandatory": false,
+              "max_length": "2 minutes"
+            },
+            {
+              "type": "PoC code",
+              "description": "Working proof-of-concept script",
+              "format": "Python/Bash/Ruby",
+              "mandatory": false
+            },
+            {
+              "type": "Terminal recording",
+              "description": "asciinema recording of exploitation",
+              "format": "asciicast",
+              "mandatory": false
+            }
+          ],
+          "priority": "P0",
+          "tips": "Create an 'evidence/' folder with numbered files: 01_request.txt, 02_response.txt, 03_screenshot.png"
+        },
+        {
+          "step_id": "1.3",
+          "description": "Calculate final CVSS score",
+          "action": "Score with official calculator and document justification",
+          "tools": ["first.org/cvss/calculator"],
+          "cvss_template": {
+            "AV": "Network (N) - The vulnerability is exploitable remotely",
+            "AC": "Low (L) - No special conditions required",
+            "PR": "None (N) - No authentication required",
+            "UI": "None (N) - No user interaction required",
+            "S": "Unchanged (U) - Scope remains within vulnerable component",
+            "C": "High (H) - All data on the system can be accessed",
+            "I": "High (H) - All system files can be modified",
+            "A": "High (H) - System availability can be impacted"
+          },
+          "priority": "P0",
+          "justification_format": "For each metric: 'Metric: Value - Brief explanation of why this value applies'"
+        },
+        {
+          "step_id": "1.4",
+          "description": "Research similar bounties",
+          "action": "Check disclosed reports for similar severity to set expectations",
+          "tools": ["hackerone hacktivity", "bugcrowd leaderboard"],
+          "command": "site:hackerone.com {{VULN_TYPE}} bounty amount",
+          "output": "bounty research notes",
+          "priority": "P2",
+          "tips": "This helps set realistic expectations. NEVER mention expected bounty in the report.",
+          "warning": "Do NOT write expected bounty amounts in your report. This is considered unprofessional."
+        }
+      ]
+    },
+    {
+      "phase_id": "2",
+      "name": "Report Writing",
+      "description": "Write the actual bug bounty report",
+      "estimated_time_minutes": 60,
+      "platform_specific_steps": {
+        "hackerone": {
+          "format": "markdown",
+          "required_sections": [
+            "Title",
+            "Executive Summary",
+            "Vulnerability Detail",
+            "Proof of Concept",
+            "Impact",
+            "CVSS",
+            "Remediation",
+            "References"
+          ]
+        },
+        "bugcrowd": {
+          "format": "form + markdown attachment",
+          "form_fields": [
+            "Vulnerability Title",
+            "Bug URL",
+            "Description",
+            "Step-by-Step Reproduction",
+            "Proof of Concept (attach file)",
+            "Impact/Severity Justification",
+            "Suggested Fix"
+          ]
+        }
+      },
+      "steps": [
+        {
+          "step_id": "2.1",
+          "description": "Write compelling title",
+          "action": "Create clear, descriptive title",
+          "priority": "P0",
+          "title_templates": {
+            "rce": "Remote Code Execution in {{PRODUCT}} via {{CVE_ID}} - {{ATTACK_VECTOR}}",
+            "sqli": "SQL Injection in {{PRODUCT}} ({{CVE_ID}}) allowing {{IMPACT}}",
+            "xss": "Stored XSS in {{PRODUCT}} via {{CVE_ID}} - {{IMPACT}}",
+            "ssrf": "Server-Side Request Forgery in {{PRODUCT}} ({{CVE_ID}})",
+            "auth_bypass": "Authentication Bypass in {{PRODUCT}} via {{CVE_ID}}",
+            "generic": "{{SEVERITY}} Vulnerability in {{PRODUCT}} ({{CVE_ID}}) - {{BRIEF_IMPACT}}"
+          },
+          "good_examples": [
+            "Remote Code Execution in Apache Struts 2 (CVE-2017-5638) via Content-Type Header",
+            "SQL Injection in WordPress Plugin (CVE-2022-21661) leading to Database Dump",
+            "Authentication Bypass in JWT Implementation (CVE-2022-23529) allowing Admin Access"
+          ],
+          "bad_examples": [
+            "Found a bug",
+            "Critical vulnerability",
+            "Please check this",
+            "RCE!!!",
+            "URGENT - PAY ME"
+          ]
+        },
+        {
+          "step_id": "2.2",
+          "description": "Write executive summary",
+          "action": "Write 2-3 sentence summary for non-technical triagers",
+          "priority": "P0",
+          "template": "A vulnerability ({{CVE_ID}}) was identified in {{PRODUCT}} that allows {{ATTACKER_CAPABILITY}}. This could lead to {{IMPACT}}. The vulnerability has a CVSS score of {{CVSS}} and {{EXPLOIT_STATUS}}.",
+          "example": "A vulnerability (CVE-2021-44228) was identified in the target's Log4j implementation that allows remote code execution without authentication. This could lead to full server compromise and data exfiltration. The vulnerability has a CVSS score of 10.0 and a public exploit is available.",
+          "tips": [
+            "First sentence: What is the vulnerability?",
+            "Second sentence: What could an attacker do?",
+            "Third sentence: How bad is it (CVSS + exploit status)?",
+            "NO technical jargon",
+            "Assume the reader is a product manager, not a security engineer"
+          ]
+        },
+        {
+          "step_id": "2.3",
+          "description": "Write technical description",
+          "action": "Explain the vulnerability in technical detail",
+          "priority": "P0",
+          "structure": [
+            "Root cause: Why does this vulnerability exist?",
+            "Attack vector: How does an attacker reach it?",
+            "Affected component: Which specific code/feature?",
+            "Trigger conditions: What input causes the vulnerability?"
+          ],
+          "example": "The application uses Apache Struts 2.3.15 (affected by CVE-2017-5638). The Jakarta Multipart parser incorrectly processes Content-Type headers containing OGNL expressions. When a crafted request is sent with a malicious Content-Type header containing OGNL code, the server evaluates the expression, leading to arbitrary code execution.",
+          "tips": [
+            "Show understanding of the underlying code issue",
+            "Reference specific functions, parameters, or files if known",
+            "Explain WHY it happens, not just WHAT happens",
+            "Link to the CVE advisory for technical details"
+          ]
+        },
+        {
+          "step_id": "2.4",
+          "description": "Write proof of concept",
+          "action": "Document step-by-step reproduction",
+          "priority": "P0",
+          "format": "Numbered steps, each with: action + expected result",
+          "template": "1. Send the following HTTP request to {{ENDPOINT}}:\\n\\n```\\n{{HTTP_REQUEST}}\\n```\\n\\n2. Observe the response contains {{INDICATOR_OF_VULNERABILITY}}\\n\\n3. To confirm impact, send: \\n\\n```\\n{{IMPACT_DEMONSTRATION_REQUEST}}\\n```\\n\\n4. Observe {{IMPACT_RESULT}}",
+          "requirements": [
+            "Every step is numbered",
+            "Each step has exact URL/parameter values",
+            "HTTP requests are in code blocks",
+            "Expected result stated for each step",
+            "A non-technical person could follow these steps"
+          ]
+        },
+        {
+          "step_id": "2.5",
+          "description": "Document impact",
+          "action": "Explain the real-world impact of this vulnerability",
+          "priority": "P0",
+          "impact_categories": {
+            "data_access": "What data could be accessed? (PII, credentials, source code)",
+            "system_compromise": "What system-level access is achievable?",
+            "lateral_movement": "Can this lead to compromise of other systems?",
+            "business_impact": "What business operations are affected?",
+            "user_impact": "How many users could be affected?"
+          },
+          "template": "Successful exploitation of this vulnerability allows an attacker to {{PRIMARY_IMPACT}}. Additionally, {{SECONDARY_IMPACTS}}. This affects approximately {{USER_COUNT}} users and could result in {{BUSINESS_CONSEQUENCES}}.",
+          "example": "Successful exploitation of this vulnerability allows an attacker to execute arbitrary commands on the server with the privileges of the web application user (www-data). Additionally, the attacker could pivot to internal networks, access the database, and exfiltrate sensitive customer data. This affects approximately 500,000 users and could result in regulatory fines under GDPR.",
+          "tips": [
+            "Quantify impact when possible (user count, data volume)",
+            "Describe the WORST realistic case, not theoretical maximum",
+            "Connect technical impact to business consequences",
+            "Mention compliance implications if applicable (GDPR, PCI-DSS, SOC 2)"
+          ]
+        },
+        {
+          "step_id": "2.6",
+          "description": "Write remediation section",
+          "action": "Provide specific, actionable fix recommendations",
+          "priority": "P0",
+          "structure": [
+            "Primary fix: The definitive solution",
+            "Alternative fix: If primary isn't immediately feasible",
+            "Temporary mitigation: What to do RIGHT NOW",
+            "Verification: How to confirm the fix works"
+          ],
+          "template": "**Recommended Fix:**\\nUpgrade {{PRODUCT}} from version {{AFFECTED_VERSION}} to {{FIXED_VERSION}}. This version patches the vulnerability by {{PATCH_DESCRIPTION}}.\\n\\n**Alternative Fix:**\\nIf upgrading is not immediately possible, {{ALTERNATIVE}}.\\n\\n**Temporary Mitigation:**\\nUntil a patch can be applied: {{TEMPORARY_MITIGATION}}.\\n\\n**References:**\\n- Vendor Advisory: {{ADVISORY_URL}}\\n- CVE Details: https://nvd.nist.gov/vuln/detail/{{CVE_ID}}",
+          "example": "Recommended Fix:\\nUpgrade Apache Struts to version 2.3.32 or 2.5.10.1. This version patches the vulnerability by removing OGNL expression evaluation from the Content-Type header parser.\\n\\nAlternative Fix:\\nIf upgrading is not immediately possible, disable the Jakarta Multipart parser by setting 'struts.multipart.parser' to 'pell' in struts.properties.\\n\\nTemporary Mitigation:\\nDeploy a WAF rule to block requests containing OGNL expressions in the Content-Type header. Monitor logs for exploitation attempts.",
+          "tips": [
+            "Always include specific version numbers",
+            "Link to official vendor advisory",
+            "Provide a temporary option for immediate risk reduction",
+            "Include verification steps so the fix team can confirm"
+          ]
+        }
+      ]
+    },
+    {
+      "phase_id": "3",
+      "name": "Quality Review",
+      "description": "Review report before submission",
+      "estimated_time_minutes": 15,
+      "steps": [
+        {
+          "step_id": "3.1",
+          "description": "Self-review checklist",
+          "action": "Run through quality checklist",
+          "priority": "P0",
+          "checklist": [
+            "Title is descriptive and professional?",
+            "Executive summary is clear to non-technical readers?",
+            "Technical description explains root cause?",
+            "Reproduction steps are numbered and complete?",
+            "All URLs and parameters are exact (not 'example.com')?",
+            "Evidence attachments are included and accessible?",
+            "Impact is quantified and realistic?",
+            "CVSS is calculated with justification?",
+            "Remediation includes specific version numbers?",
+            "Vendor advisory is linked?",
+            "No expected bounty amount is mentioned?",
+            "No spelling/grammar errors in critical sections?",
+            "All links work?",
+            "Personal info is redacted (if desired)?"
+          ]
+        },
+        {
+          "step_id": "3.2",
+          "description": "Peer review (optional but recommended)",
+          "action": "Have another researcher review the report",
+          "priority": "P2",
+          "reviewer_questions": [
+            "Can you reproduce the vulnerability from these steps alone?",
+            "Is the impact clear and realistic?",
+            "Is anything confusing or missing?",
+            "Would this convince you to fix it urgently?"
+          ]
+        },
+        {
+          "step_id": "3.3",
+          "description": "Platform-specific formatting",
+          "action": "Apply platform-specific formatting requirements",
+          "priority": "P1",
+          "platform_rules": {
+            "hackerone": [
+              "Use markdown formatting",
+              "Embed images with markdown syntax: ![alt](url)",
+              "Code blocks for HTTP requests and PoC",
+              "Headers with # for section organization"
+            ],
+            "bugcrowd": [
+              "Fill all form fields completely",
+              "Attach PoC as separate file if large",
+              "Use markdown in description fields",
+              "Include Bug URL field with exact vulnerable endpoint"
+            ],
+            "intigriti": [
+              "Use formal, professional language",
+              "Include all technical details",
+              "Clear impact explanation",
+              "European GDPR considerations if applicable"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "phase_id": "4",
+      "name": "Submission",
+      "description": "Submit the report and track it",
+      "estimated_time_minutes": 15,
+      "steps": [
+        {
+          "step_id": "4.1",
+          "description": "Submit to platform",
+          "action": "Submit through official platform portal",
+          "priority": "P0",
+          "submission_checklist": [
+            "Selected correct program?",
+            "Selected correct asset from dropdown?",
+            "Vulnerability type correctly categorized?",
+            "Severity selected matches CVSS?",
+            "All attachments uploaded?",
+            "Report body pasted correctly?",
+            "Preview looks correct?"
+          ],
+          "after_submit": [
+            "Screenshot submission confirmation page",
+            "Copy submission ID",
+            "Note estimated response time from program page",
+            "Add to personal tracking spreadsheet"
+          ]
+        },
+        {
+          "step_id": "4.2",
+          "description": "Log submission",
+          "action": "Record submission in tracking system",
+          "priority": "P1",
+          "tracking_fields": {
+            "submission_id": "Platform-assigned ID",
+            "program": "Bug bounty program name",
+            "platform": "hackerone/bugcrowd/intigriti",
+            "cve_id": "Associated CVE if applicable",
+            "vuln_type": "Vulnerability category",
+            "cvss_score": "Calculated CVSS",
+            "severity": "Submitted severity",
+            "submitted_date": "ISO 8601 timestamp",
+            "estimated_response": "Days from program page",
+            "status": "submitted/triaging/needs_info/resolved/etc",
+            "bounty_awarded": "Amount or pending",
+            "notes": "Any special circumstances"
+          },
+          "tools": ["spreadsheet", "notion", "jira"]
+        },
+        {
+          "step_id": "4.3",
+          "description": "Set follow-up reminders",
+          "action": "Create calendar reminders for follow-ups",
+          "priority": "P1",
+          "reminder_schedule": {
+            "day_3": "Check if report is being triaged",
+            "day_7": "Polite status inquiry if no response",
+            "day_14": "Follow-up if in 'Triaged' without resolution",
+            "day_30": "Inquiry about resolution timeline",
+            "day_90": "Consider disclosure timeline discussion"
+          },
+          "follow_up_template": "Hi team, I'm following up on report #{{ID}} submitted on {{DATE}} regarding {{TITLE}}. I wanted to check if there's any additional information I can provide to help with triage. I'm happy to retest or clarify any points. Thank you for your time!"
+        }
+      ]
+    },
+    {
+      "phase_id": "5",
+      "name": "Post-Submission Management",
+      "description": "Handle triager communication and resolution",
+      "estimated_time_minutes": 30,
+      "steps": [
+        {
+          "step_id": "5.1",
+          "description": "Respond to triager questions",
+          "action": "Answer questions promptly and thoroughly",
+          "priority": "P0",
+          "response_guidelines": [
+            "Respond within 24 hours when possible",
+            "Be concise but complete",
+            "Don't be defensive if they ask for clarification",
+            "Provide exactly what they ask for - no more, no less",
+            "If asked to retest, do it within 48 hours",
+            "If you disagree with severity, provide evidence politely"
+          ],
+          "common_requests": {
+            "retest": "Re-run your PoC and confirm it's still reproducible. Document the result.",
+            "screenshot": "Provide additional screenshots of specific behavior.",
+            "cvss_justification": "Expand on why you chose specific CVSS metrics.",
+            "impact_clarification": "Explain the business impact more clearly.",
+            "scope_verification": "Confirm the affected asset is in-scope."
+          }
+        },
+        {
+          "step_id": "5.2",
+          "description": "Handle severity disputes",
+          "action": "Advocate for appropriate severity if downgraded",
+          "priority": "P1",
+          "approach": [
+            "Thank triager for their assessment",
+            "Present evidence supporting your severity",
+            "Reference similar reports with same severity",
+            "Be respectful - they have final say",
+            "Accept their decision gracefully"
+          ],
+          "evidence_to_present": [
+            "CVSS calculator output with your justifications",
+            "Reference to vendor severity rating",
+            "Similar CVEs with same severity on the platform",
+            "Impact demonstration evidence"
+          ]
+        },
+        {
+          "step_id": "5.3",
+          "description": "Request disclosure",
+          "action": "Request public disclosure after fix",
+          "priority": "P2",
+          "timing": "After vulnerability is confirmed fixed",
+          "benefits": [
+            "Builds public reputation and profile",
+            "Attracts private program invitations",
+            "Helps other researchers learn",
+            "Serves as portfolio piece"
+          ],
+          "request_template": "Hi team, now that this vulnerability has been resolved, I'd like to request public disclosure. I'm happy to collaborate on a redacted version if needed. Thank you!"
+        },
+        {
+          "step_id": "5.4",
+          "description": "Update tracking",
+          "action": "Record final resolution details",
+          "priority": "P1",
+          "final_fields": {
+            "resolution_date": "When was it fixed?",
+            "final_severity": "Agreed severity",
+            "bounty_amount": "Final bounty awarded",
+            "disclosure_status": "Public/disclosed/private",
+            "lessons_learned": "What would you do differently?"
+          }
+        }
+      ]
+    }
+  ],
+  "report_quality_checklist": {
+    "structure": [
+      "Clear, descriptive title",
+      "Executive summary (2-3 sentences)",
+      "Technical description with root cause",
+      "Numbered reproduction steps",
+      "Evidence (screenshots, HTTP logs)",
+      "Impact quantification",
+      "CVSS with justification",
+      "Remediation with specific versions",
+      "References to advisories"
+    ],
+    "language": [
+      "Professional tone throughout",
+      "No jargon in executive summary",
+      "Technical terms explained when first used",
+      "No spelling/grammar errors",
+      "No ALL CAPS except for emphasis",
+      "No emotional language or urgency pressure"
+    ],
+    "professionalism": [
+      "No bounty amount expectations mentioned",
+      "No threats or ultimatums",
+      "Respectful of triager's time",
+      "Acknowledges responsible disclosure",
+      "Includes 'thank you' for the program"
+    ]
+  },
+  "common_pitfalls": {
+    "vague_titles": "Use descriptive titles, not 'Found a bug' or 'XSS'",
+    "missing_evidence": "Always include screenshots and HTTP logs",
+    "unclear_steps": "Non-technical person should be able to reproduce",
+    "exaggerated_impact": "Be realistic - overclaiming damages credibility",
+    "wrong_platform_format": "Each platform has preferences - adapt accordingly",
+    "slow_response": "Respond to triager questions within 24 hours",
+    "scope_mistakes": "Double-check scope before submitting",
+    "incomplete_cvss": "Justify every metric choice"
+  },
+  "Escalation_contacts": {
+    "hackerone_support": "https://support.hackerone.com",
+    "bugcrowd_support": "support@bugcrowd.com",
+    "intigriti_support": "support@intigriti.com"
+  }
+}
