@@ -21,6 +21,7 @@ import importlib.util
 import logging
 import sys
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -44,7 +45,7 @@ from pocmap.config import (
     nvd_api_key_looks_valid,
     settings,
 )
-from pocmap.models import export_schemas
+from pocmap.models import CVEInfo, export_schemas
 from pocmap.services.bb_service import BugBountyService
 from pocmap.services.cve_service import CVEService
 from pocmap.services.exploit_service import ExploitService
@@ -126,6 +127,83 @@ def _emit_json_error(exc: Exception, *, category: str) -> None:
         OutputFormat.JSON,
         console=console,
     )
+
+
+def _resolve_output(
+    ctx: typer.Context,
+    output_format: OutputFormat | None,
+    quiet: bool,
+) -> tuple[OutputFormat, bool]:
+    """Merge a command-local ``--format``/``--quiet`` with the global callback.
+
+    A locally-passed ``--format``/``--quiet`` overrides the global (callback)
+    value recorded on ``ctx.obj``; otherwise the global value wins. Mirrors the
+    ``lookup`` reference wiring.
+    """
+    state = _state(ctx)
+    fmt = output_format if output_format is not None else state.output_format
+    is_quiet = quiet or state.quiet
+    return fmt, is_quiet
+
+
+def _reject_sarif(fmt: OutputFormat) -> None:
+    """Reject ``--format sarif`` on commands whose data is not a CVE list.
+
+    SARIF results are keyed on CVE ids, so only the CVE-list commands
+    (``latest``/``discover``) can produce a well-formed log. Every other command
+    fails fast with a clear :attr:`ExitCode.INVALID_INPUT` instead of emitting a
+    misleading or empty SARIF document.
+    """
+    if fmt is OutputFormat.SARIF:
+        rprint(
+            "[red3]Error: SARIF output is only available for the CVE-list "
+            "commands (latest, discover)[/red3]"
+        )
+        raise typer.Exit(ExitCode.INVALID_INPUT)
+
+
+def _emit_cli_error(exc: Exception, *, fmt: OutputFormat, category: str) -> None:
+    """Emit an error as JSON (json mode) or a red console line (every other mode)."""
+    if fmt is OutputFormat.JSON:
+        _emit_json_error(exc, category=category)
+    else:
+        rprint(f"[red3]Error: {exc}[/red3]")
+
+
+def _cve_sarif_dict(cve: CVEInfo, *, exploit_count: int | None) -> dict[str, object]:
+    """Map a :class:`CVEInfo` to the CVE-shaped dict the SARIF renderer expects."""
+    cvss = cve.cvss
+    cvss_block: dict[str, object] | None = (
+        {"base_score": cvss.base_score, "severity": cvss.severity.value}
+        if cvss is not None
+        else None
+    )
+    return {
+        "id": cve.id,
+        "description": cve.description,
+        "cvss": cvss_block,
+        "epss": cve.epss,
+        "kev_status": cve.kev_status,
+        "exploit_count": exploit_count,
+        "cwes": cve.cwes,
+    }
+
+
+def _discover_cve_row(cve: CVEInfo, *, tier: str) -> dict[str, object]:
+    """Flatten a discovered :class:`CVEInfo` into a CSV/Markdown row (+ tier)."""
+    cvss = cve.cvss
+    return {
+        "cve_id": cve.id,
+        "tier": tier,
+        "severity": cvss.severity.value if cvss is not None else "UNKNOWN",
+        "base_score": cvss.base_score if cvss is not None else None,
+        "epss": cve.epss,
+        "kev_status": cve.kev_status,
+        "vendor": cve.vendor,
+        "product": cve.product,
+        "publication_date": cve.publication_date,
+        "description": cve.description,
+    }
 
 
 def _lookup_json(cve: str, *, language: str | None, limit: int) -> None:
@@ -348,122 +426,226 @@ def bulk(
 
 @app.command()
 def labs(
+    ctx: typer.Context,
     cve: Annotated[str, typer.Argument(help="CVE ID to search labs for")],
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Output format: table (default), json, csv, md"),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress decorative output"),
+    ] = False,
 ) -> None:
     """Search for CTF labs and vulnerable environments related to a CVE."""
+    fmt, is_quiet = _resolve_output(ctx, output_format, quiet)
+    _reject_sarif(fmt)
+
     with LabService() as service:
         try:
             CVEService.validate_cve_id(cve)
         except ValidationError as exc:
-            rprint(f"[red3]Error: {exc}[/red3]")
-            raise typer.Exit(1) from exc
+            _emit_cli_error(exc, fmt=fmt, category="invalid_input")
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
 
         results = service.find_labs(cve)
 
-        if not results:
+    if not results:
+        if fmt is OutputFormat.TABLE:
             rprint(f"[red3]No labs found for {cve}[/red3]")
-            raise typer.Exit(0)
+        else:
+            render({"cve": cve, "labs": []} if fmt is OutputFormat.JSON else [], fmt, console=console)
+        raise typer.Exit(ExitCode.NO_RESULTS)
 
+    if fmt is not OutputFormat.TABLE:
+        rows = [lab.model_dump(mode="json") for lab in results]
+        view = {"cve": cve, "labs": rows} if fmt is OutputFormat.JSON else rows
+        render(view, fmt, console=console, title=f"Lab Environments for {cve}")
+        return
+
+    if not is_quiet:
         rprint(f"\n[bold]Lab Environments for {cve}[/bold]")
-        for lab in results:
-            if lab.platform.value == "vulhub" and lab.setup_instructions:
-                rprint(f"\n[bright_cyan]{lab.platform.value}[/bright_cyan]")
-                rprint(lab.setup_instructions)
-            else:
-                rprint(f"[bright_cyan]{lab.platform.value}[/bright_cyan]: {lab.name} -> {lab.url}")
+    for lab in results:
+        if lab.platform.value == "vulhub" and lab.setup_instructions:
+            rprint(f"\n[bright_cyan]{lab.platform.value}[/bright_cyan]")
+            rprint(lab.setup_instructions)
+        else:
+            rprint(f"[bright_cyan]{lab.platform.value}[/bright_cyan]: {lab.name} -> {lab.url}")
 
 
 @app.command()
 def bugbounty(
+    ctx: typer.Context,
     cve: Annotated[str, typer.Argument(help="CVE ID to search bug bounty reports for")],
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Output format: table (default), json, csv, md"),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress decorative output"),
+    ] = False,
 ) -> None:
     """Search for bug bounty reports related to a CVE."""
+    fmt, is_quiet = _resolve_output(ctx, output_format, quiet)
+    _reject_sarif(fmt)
+
     with BugBountyService() as service:
         try:
             CVEService.validate_cve_id(cve)
         except ValidationError as exc:
-            rprint(f"[red3]Error: {exc}[/red3]")
-            raise typer.Exit(1) from exc
+            _emit_cli_error(exc, fmt=fmt, category="invalid_input")
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
 
         results = service.find_reports(cve)
 
-        if not results:
+    if not results:
+        if fmt is OutputFormat.TABLE:
             rprint(f"[red3]No bug bounty reports found for {cve}[/red3]")
-            raise typer.Exit(0)
+        else:
+            render(
+                {"cve": cve, "reports": []} if fmt is OutputFormat.JSON else [],
+                fmt,
+                console=console,
+            )
+        raise typer.Exit(ExitCode.NO_RESULTS)
 
+    if fmt is not OutputFormat.TABLE:
+        rows = [r.model_dump(mode="json") for r in results]
+        view = {"cve": cve, "reports": rows} if fmt is OutputFormat.JSON else rows
+        render(view, fmt, console=console, title=f"Bug Bounty Reports for {cve}")
+        return
+
+    if not is_quiet:
         rprint(f"\n[bold]Bug Bounty Reports for {cve}[/bold]")
-        rprint(format_bb_table(results))
+    rprint(format_bb_table(results))
 
 
 @app.command()
 def cpes(
+    ctx: typer.Context,
     cve: Annotated[str, typer.Argument(help="CVE ID to retrieve CPEs for")],
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Output format: table (default), json, csv, md"),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress decorative output"),
+    ] = False,
 ) -> None:
     """Retrieve CPE identifiers related to a CVE."""
+    fmt, is_quiet = _resolve_output(ctx, output_format, quiet)
+    _reject_sarif(fmt)
+
     with CVEService() as service:
         try:
             CVEService.validate_cve_id(cve)
         except ValidationError as exc:
-            rprint(f"[red3]Error: {exc}[/red3]")
-            raise typer.Exit(1) from exc
+            _emit_cli_error(exc, fmt=fmt, category="invalid_input")
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
 
         cpe_list = service.get_cpes(cve)
 
-        if not cpe_list:
+    if not cpe_list:
+        if fmt is OutputFormat.TABLE:
             rprint(f"[red3]No CPEs found for {cve}[/red3]")
-            raise typer.Exit(0)
+        else:
+            render(
+                {"cve": cve, "cpes": []} if fmt is OutputFormat.JSON else [],
+                fmt,
+                console=console,
+            )
+        raise typer.Exit(ExitCode.NO_RESULTS)
 
+    if fmt is not OutputFormat.TABLE:
+        rows = [cpe.model_dump(mode="json") for cpe in cpe_list]
+        view = {"cve": cve, "cpes": rows} if fmt is OutputFormat.JSON else rows
+        render(view, fmt, console=console, title=f"Affected CPEs for {cve}")
+        return
+
+    if not is_quiet:
         rprint("\n[bold]Known Affected Software Configurations (CPE 2.3)[/bold]")
-        table = Table(show_lines=True, header_style="bold")
-        table.add_column("Namespace")
-        table.add_column("Version")
-        table.add_column("Type")
-        table.add_column("Vendor")
-        table.add_column("Product")
-        table.add_column("Version")
+    table = Table(show_lines=True, header_style="bold")
+    table.add_column("Namespace")
+    table.add_column("Version")
+    table.add_column("Type")
+    table.add_column("Vendor")
+    table.add_column("Product")
+    table.add_column("Version")
 
-        for cpe in cpe_list:
-            parts = cpe.cpe_string.split(":")
-            if len(parts) >= 6:
-                table.add_row(
-                    f"[bright_blue]{parts[0]}[/bright_blue]",
-                    f"[bright_cyan]{parts[1]}[/bright_cyan]",
-                    f"[dark_orange]{parts[2]}[/dark_orange]",
-                    f"[spring_green2]{parts[3]}[/spring_green2]",
-                    f"[bright_yellow]{parts[4]}[/bright_yellow]",
-                    f"[bright_red]{parts[5]}[/bright_red]",
-                )
-            else:
-                table.add_row(cpe.cpe_string, "", "", "", "", "")
+    for cpe in cpe_list:
+        parts = cpe.cpe_string.split(":")
+        if len(parts) >= 6:
+            table.add_row(
+                f"[bright_blue]{parts[0]}[/bright_blue]",
+                f"[bright_cyan]{parts[1]}[/bright_cyan]",
+                f"[dark_orange]{parts[2]}[/dark_orange]",
+                f"[spring_green2]{parts[3]}[/spring_green2]",
+                f"[bright_yellow]{parts[4]}[/bright_yellow]",
+                f"[bright_red]{parts[5]}[/bright_red]",
+            )
+        else:
+            table.add_row(cpe.cpe_string, "", "", "", "", "")
 
-        rprint(table)
+    rprint(table)
 
 
 @app.command()
 def cpe2cve(
+    ctx: typer.Context,
     cpe: Annotated[str, typer.Argument(help="CPE 2.3 string (e.g., cpe:2.3:o:microsoft:windows_10:1607)")],
     save: Annotated[Path | None, typer.Option("--save", "-s", help="Save results to file")] = None,
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Output format: table (default), json, csv, md"),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress decorative output"),
+    ] = False,
 ) -> None:
     """Retrieve CVE IDs related to a CPE identifier."""
+    fmt, is_quiet = _resolve_output(ctx, output_format, quiet)
+    # SARIF needs full CVE records; cpe2cve only yields bare CVE ids.
+    _reject_sarif(fmt)
+
     with CVEService() as service:
         try:
             cve_ids = service.cpe_to_cves(cpe)
         except ValidationError as exc:
-            rprint(f"[red3]Error: {exc}[/red3]")
-            raise typer.Exit(1) from exc
+            _emit_cli_error(exc, fmt=fmt, category="invalid_input")
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
 
-        if not cve_ids:
+    if not cve_ids:
+        if fmt is OutputFormat.TABLE:
             rprint(f"[red3]No CVE IDs found for CPE: {cpe}[/red3]")
-            raise typer.Exit(0)
-
-        result = "\n".join(cve_ids)
-
-        if save:
-            save.write_text(result, encoding="utf-8")
-            rprint(f"[green1]Results saved to {save}[/green1]")
         else:
-            rprint("\n[bold]List of Affected CVE IDs[/bold]")
-            rprint(result)
+            render(
+                {"cpe": cpe, "cve_ids": []} if fmt is OutputFormat.JSON else [],
+                fmt,
+                console=console,
+            )
+        raise typer.Exit(ExitCode.NO_RESULTS)
+
+    result = "\n".join(cve_ids)
+
+    # --save always writes the raw newline-joined id list (unchanged contract);
+    # --format governs only what is rendered to stdout.
+    if save:
+        save.write_text(result, encoding="utf-8")
+
+    if fmt is not OutputFormat.TABLE:
+        rows = [{"cve_id": cid} for cid in cve_ids]
+        view = {"cpe": cpe, "cve_ids": cve_ids} if fmt is OutputFormat.JSON else rows
+        render(view, fmt, console=console, title=f"Affected CVE IDs for {cpe}")
+        return
+
+    if save:
+        rprint(f"[green1]Results saved to {save}[/green1]")
+    else:
+        rprint("\n[bold]List of Affected CVE IDs[/bold]")
+        rprint(result)
 
 
 @app.command()
@@ -503,6 +685,7 @@ def schemas(
 
 @app.command()
 def latest(
+    ctx: typer.Context,
     since: Annotated[str | None, typer.Option("--since", help="Relative time: 1h, 24h, 7d, 30d")] = None,
     from_date: Annotated[str | None, typer.Option("--from", help="Start date YYYY-MM-DD")] = None,
     to_date: Annotated[str | None, typer.Option("--to", help="End date YYYY-MM-DD")] = None,
@@ -513,8 +696,18 @@ def latest(
     sort: Annotated[str, typer.Option("--sort", help="Sort by: cve_date, severity, epss")] = "cve_date",
     limit: Annotated[int, typer.Option("--limit", help="Max results", min=1, max=100)] = 50,
     output: Annotated[str | None, typer.Option("--output", "-o", help="Save JSON report to file")] = None,
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Output format: table (default), json, csv, md, sarif"),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress decorative output"),
+    ] = False,
 ) -> None:
     """Find recently published CVEs with exploit intelligence."""
+    fmt, is_quiet = _resolve_output(ctx, output_format, quiet)
+
     # Parse date arguments
     parsed_from: date | None = None
     parsed_to: date | None = None
@@ -524,14 +717,14 @@ def latest(
             parsed_from = date.fromisoformat(from_date)
         except ValueError as exc:
             rprint(f"[red3]Invalid --from date: {from_date}. Use YYYY-MM-DD format.[/red3]")
-            raise typer.Exit(1) from exc
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
 
     if to_date:
         try:
             parsed_to = date.fromisoformat(to_date)
         except ValueError as exc:
             rprint(f"[red3]Invalid --to date: {to_date}. Use YYYY-MM-DD format.[/red3]")
-            raise typer.Exit(1) from exc
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
 
     # Parse severity
     severity_list: list[str] | None = None
@@ -541,16 +734,25 @@ def latest(
     # Validate sort
     if sort not in ("cve_date", "severity", "epss"):
         rprint(f"[red3]Invalid --sort: {sort}. Use: cve_date, severity, or epss[/red3]")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.INVALID_INPUT)
 
+    # The transient spinner writes to stdout, so suppress it in machine-readable
+    # / quiet modes to keep those streams clean (JSON/CSV/SARIF stay parseable).
+    show_progress = fmt is OutputFormat.TABLE and not is_quiet
+    progress_cm: Progress | nullcontext[None] = (
+        Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        )
+        if show_progress
+        else nullcontext()
+    )
     with RecentService() as service:
         try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                transient=True,
-            ) as progress:
-                progress.add_task("[bright_blue]Fetching recent CVEs from NVD...[/bright_blue]", total=None)
+            with progress_cm as progress:
+                if progress is not None:
+                    progress.add_task("[bright_blue]Fetching recent CVEs from NVD...[/bright_blue]", total=None)
                 results = service.find_recent_cves(
                     since=since,
                     from_date=parsed_from,
@@ -564,83 +766,112 @@ def latest(
                 )
         except ValueError as exc:
             rprint(f"[red3]Error: {exc}[/red3]")
-            raise typer.Exit(1) from exc
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
         except Exception as exc:
             rprint(f"[red3]Error fetching recent CVEs: {exc}[/red3]")
-            raise typer.Exit(1) from exc
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
     if not results:
-        rprint("[yellow]No CVEs found matching the specified criteria.[/yellow]")
-        raise typer.Exit(0)
+        if fmt is OutputFormat.TABLE:
+            rprint("[yellow]No CVEs found matching the specified criteria.[/yellow]")
+        elif fmt is OutputFormat.JSON:
+            render({"total": 0, "cves": []}, fmt, console=console)
+        else:  # csv / md / sarif -> a well-formed empty document
+            render([], fmt, console=console)
+        raise typer.Exit(ExitCode.NO_RESULTS)
 
-    # Display results
-    rprint(f"\n[bold]Found {len(results)} recent CVE(s)[/bold]")
-    rprint(format_recent_cves_table(results))
+    # Build the structured view model once (shared by JSON stdout + --output file).
+    cve_rows: list[dict[str, object]] = [
+        {
+            "cve_id": r.cve_info.id,
+            "description": r.cve_info.description,
+            "severity": r.cve_info.cvss.severity.value if r.cve_info.cvss else "UNKNOWN",
+            "base_score": r.cve_info.cvss.base_score if r.cve_info.cvss else None,
+            "epss": r.cve_info.epss,
+            "kev_status": r.cve_info.kev_status,
+            "vendor": r.cve_info.vendor,
+            "product": r.cve_info.product,
+            "publication_date": r.cve_info.publication_date,
+            "has_poc": r.has_poc,
+            "poc_sources": [s.value for s in r.poc_sources],
+        }
+        for r in results
+    ]
+    report_data: dict[str, object] = {
+        "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
+        "query": {
+            "since": since,
+            "from_date": str(parsed_from) if parsed_from else None,
+            "to_date": str(parsed_to) if parsed_to else None,
+            "severity": severity_list,
+            "kev_only": kev_only,
+            "min_epss": min_epss,
+            "only_with_poc": only_with_poc,
+            "sort": sort,
+            "limit": limit,
+        },
+        "total": len(results),
+        "cves": cve_rows,
+    }
 
-    # Summary
-    poc_count = sum(1 for r in results if r.has_poc)
-    kev_count = sum(1 for r in results if r.cve_info.kev_status)
-    critical_high = sum(
-        1 for r in results
-        if r.cve_info.cvss and r.cve_info.cvss.severity.value in ("CRITICAL", "HIGH")
-    )
-    rprint(
-        f"\n[dim]Summary: {poc_count} with PoC | {kev_count} in KEV | "
-        f"{critical_high} Critical/High[/dim]"
-    )
+    # STDOUT rendering by format (the default table path is byte-for-byte as before).
+    if fmt is OutputFormat.TABLE:
+        rprint(f"\n[bold]Found {len(results)} recent CVE(s)[/bold]")
+        rprint(format_recent_cves_table(results))
 
-    # Save to file if requested
+        # Summary
+        poc_count = sum(1 for r in results if r.has_poc)
+        kev_count = sum(1 for r in results if r.cve_info.kev_status)
+        critical_high = sum(
+            1 for r in results
+            if r.cve_info.cvss and r.cve_info.cvss.severity.value in ("CRITICAL", "HIGH")
+        )
+        rprint(
+            f"\n[dim]Summary: {poc_count} with PoC | {kev_count} in KEV | "
+            f"{critical_high} Critical/High[/dim]"
+        )
+    elif fmt is OutputFormat.SARIF:
+        sarif_cves = [
+            _cve_sarif_dict(r.cve_info, exploit_count=len(r.poc_sources)) for r in results
+        ]
+        render(sarif_cves, fmt, console=console)
+    elif fmt is OutputFormat.JSON:
+        render(report_data, fmt, console=console)
+    else:  # csv / md
+        render(cve_rows, fmt, console=console, title="Recent CVEs")
+
+    # Save to file if requested (unchanged JSON content; --format governs stdout).
     if output:
         import json as _json
         try:
             _safe_path(output)
         except ValueError as exc:
             rprint(f"[red3]Unsafe output path: {exc}[/red3]")
-            raise typer.Exit(1) from exc
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
         output_path = Path(output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        report_data = {
-            "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
-            "query": {
-                "since": since,
-                "from_date": str(parsed_from) if parsed_from else None,
-                "to_date": str(parsed_to) if parsed_to else None,
-                "severity": severity_list,
-                "kev_only": kev_only,
-                "min_epss": min_epss,
-                "only_with_poc": only_with_poc,
-                "sort": sort,
-                "limit": limit,
-            },
-            "total": len(results),
-            "cves": [
-                {
-                    "cve_id": r.cve_info.id,
-                    "description": r.cve_info.description,
-                    "severity": r.cve_info.cvss.severity.value if r.cve_info.cvss else "UNKNOWN",
-                    "base_score": r.cve_info.cvss.base_score if r.cve_info.cvss else None,
-                    "epss": r.cve_info.epss,
-                    "kev_status": r.cve_info.kev_status,
-                    "vendor": r.cve_info.vendor,
-                    "product": r.cve_info.product,
-                    "publication_date": r.cve_info.publication_date,
-                    "has_poc": r.has_poc,
-                    "poc_sources": [s.value for s in r.poc_sources],
-                }
-                for r in results
-            ],
-        }
         output_path.write_text(_json.dumps(report_data, indent=2, default=str), encoding="utf-8")
-        rprint(f"\n[green1]Report saved to {output_path}[/green1]")
+        # Keep the confirmation out of machine-readable streams.
+        if fmt is OutputFormat.TABLE and not is_quiet:
+            rprint(f"\n[green1]Report saved to {output_path}[/green1]")
 
 
 @app.command()
 def discover(
+    ctx: typer.Context,
     product: Annotated[str, typer.Argument(help="Product name (e.g., 'Apache Struts', 'Log4j')")],
     version: Annotated[str | None, typer.Option("--version", "-v", help="Version: 2.x, 2.14.1, etc.")] = None,
     vendor: Annotated[str | None, typer.Option("--vendor", help="Vendor name (e.g., 'Apache')")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Max CVEs to analyze", min=1, max=100)] = 50,
     output: Annotated[str | None, typer.Option("--output", "-o", help="Save JSON report to file")] = None,
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Output format: table (default), json, csv, md, sarif"),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress decorative output"),
+    ] = False,
 ) -> None:
     """Discover CVEs affecting a product by name and version.
 
@@ -652,14 +883,24 @@ def discover(
     - Possibly: vendor OR product matches but version info is unclear
     - Not enough data: CVE has insufficient product/version information
     """
-    with ProductDiscoveryService() as service, Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        transient=True,
-    ) as progress:
-        progress.add_task(
-            f"[bright_blue]Discovering CVEs for {product}...[/bright_blue]", total=None
+    fmt, is_quiet = _resolve_output(ctx, output_format, quiet)
+
+    # Suppress the stdout spinner in machine-readable / quiet modes.
+    show_progress = fmt is OutputFormat.TABLE and not is_quiet
+    progress_cm: Progress | nullcontext[None] = (
+        Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
         )
+        if show_progress
+        else nullcontext()
+    )
+    with ProductDiscoveryService() as service, progress_cm as progress:
+        if progress is not None:
+            progress.add_task(
+                f"[bright_blue]Discovering CVEs for {product}...[/bright_blue]", total=None
+            )
         try:
             result = service.discover_by_product(
                 product=product,
@@ -671,7 +912,64 @@ def discover(
             rprint(f"[red3]Error: {exc}[/red3]")
             raise typer.Exit(1) from exc
 
-    # Display summary
+    tiers = (
+        ("confirmed", result.confirmed_affected),
+        ("possibly", result.possibly_affected),
+        ("not_enough_data", result.not_enough_data),
+    )
+    is_empty = not (
+        result.confirmed_affected or result.possibly_affected or result.not_enough_data
+    )
+
+    # Structured report (shared by JSON stdout + --output file; content unchanged).
+    report_data: dict[str, object] = {
+        "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
+        "query": result.query,
+        "normalized_vendor": result.normalized_vendor,
+        "normalized_product": result.normalized_product,
+        "version_constraint": result.version_constraint.model_dump(mode="json") if result.version_constraint else None,
+        "total_found": result.total_found,
+        "confirmed_affected": [cve.model_dump(mode="json") for cve in result.confirmed_affected],
+        "possibly_affected": [cve.model_dump(mode="json") for cve in result.possibly_affected],
+        "not_enough_data": [cve.model_dump(mode="json") for cve in result.not_enough_data],
+    }
+
+    def _write_output_file() -> None:
+        """Persist ``report_data`` to ``--output`` (unchanged JSON contract)."""
+        if not output:
+            return
+        import json as _json
+        try:
+            _safe_path(output)
+        except ValueError as exc:
+            rprint(f"[red3]Unsafe output path: {exc}[/red3]")
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(_json.dumps(report_data, indent=2, default=str), encoding="utf-8")
+        if fmt is OutputFormat.TABLE and not is_quiet:
+            rprint(f"\n[green1]Report saved to {output_path}[/green1]")
+
+    # Machine-readable formats: emit the view model, save the file, set exit code.
+    if fmt is not OutputFormat.TABLE:
+        if fmt is OutputFormat.SARIF:
+            sarif_cves = [
+                _cve_sarif_dict(cve, exploit_count=None)
+                for _tier, cves in tiers
+                for cve in cves
+            ]
+            render(sarif_cves, fmt, console=console)
+        elif fmt is OutputFormat.JSON:
+            render(report_data, fmt, console=console)
+        else:  # csv / md
+            rows = [
+                _discover_cve_row(cve, tier=tier) for tier, cves in tiers for cve in cves
+            ]
+            render(rows, fmt, console=console, title=f"Product Discovery: {result.query}")
+        _write_output_file()
+        raise typer.Exit(ExitCode.NO_RESULTS if is_empty else ExitCode.OK)
+
+    # Default table rendering (byte-for-byte as before).
     rprint("\n[bold]Product Discovery Results[/bold]")
     rprint(f"[dim]Query: {result.query}[/dim]")
     if result.normalized_vendor or result.normalized_product:
@@ -705,29 +1003,9 @@ def discover(
     if result.not_enough_data:
         rprint(f"\n[dim]Not Enough Data ({len(result.not_enough_data)})[/dim]")
 
-    # Save to file if requested
-    if output:
-        import json as _json
-        try:
-            _safe_path(output)
-        except ValueError as exc:
-            rprint(f"[red3]Unsafe output path: {exc}[/red3]")
-            raise typer.Exit(1) from exc
-        output_path = Path(output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        report_data = {
-            "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
-            "query": result.query,
-            "normalized_vendor": result.normalized_vendor,
-            "normalized_product": result.normalized_product,
-            "version_constraint": result.version_constraint.model_dump(mode="json") if result.version_constraint else None,
-            "total_found": result.total_found,
-            "confirmed_affected": [cve.model_dump(mode="json") for cve in result.confirmed_affected],
-            "possibly_affected": [cve.model_dump(mode="json") for cve in result.possibly_affected],
-            "not_enough_data": [cve.model_dump(mode="json") for cve in result.not_enough_data],
-        }
-        output_path.write_text(_json.dumps(report_data, indent=2, default=str), encoding="utf-8")
-        rprint(f"\n[green1]Report saved to {output_path}[/green1]")
+    _write_output_file()
+    if is_empty:
+        raise typer.Exit(ExitCode.NO_RESULTS)
 
 
 # ---------------------------------------------------------------------------
