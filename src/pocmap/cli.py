@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich import print as rprint
@@ -41,6 +42,7 @@ from pocmap import __version__
 from pocmap.config import (
     GITHUB_API_BASE,
     NVD_API_BASE,
+    enable_offline,
     github_token_looks_valid,
     nvd_api_key_looks_valid,
     settings,
@@ -53,6 +55,14 @@ from pocmap.services.lab_service import LabService
 from pocmap.services.product_service import ProductDiscoveryService
 from pocmap.services.recent_service import RecentService
 from pocmap.services.report_service import ReportService
+from pocmap.services.snapshot import (
+    SnapshotDiff,
+    SnapshotRecord,
+    diff_snapshots,
+    load_snapshot,
+    make_query_key,
+    save_snapshot,
+)
 from pocmap.utils.cache import HTTPCache
 from pocmap.utils.exit_codes import ExitCode
 from pocmap.utils.formatters import (
@@ -61,7 +71,7 @@ from pocmap.utils.formatters import (
     format_exploit_table,
     format_recent_cves_table,
 )
-from pocmap.utils.http import HTTPClient, NotFoundError, ValidationError
+from pocmap.utils.http import HTTPClient, NotFoundError, OfflineError, ValidationError
 from pocmap.utils.output import OutputFormat, render
 from pocmap.utils.paths import safe_path as _safe_path
 
@@ -73,6 +83,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 console = Console()
+# Separate stderr console for notes that must not pollute a machine-readable
+# stdout stream (e.g. the ``bulk --fail-on`` gate message under ``--format json``).
+err_console = Console(stderr=True)
 app = typer.Typer(
     name="pocmap",
     help="A modern, AI-friendly tool to find PoCs related to CVE IDs",
@@ -102,10 +115,12 @@ class CLIState:
     Attributes:
         output_format: The selected output format (``table`` by default).
         quiet: Whether to suppress the banner and decorative output.
+        offline: Whether the process is in offline (cache-only) mode.
     """
 
     output_format: OutputFormat = OutputFormat.TABLE
     quiet: bool = False
+    offline: bool = False
 
 
 def _state(ctx: typer.Context) -> CLIState:
@@ -206,6 +221,231 @@ def _discover_cve_row(cve: CVEInfo, *, tier: str) -> dict[str, object]:
     }
 
 
+# ---------------------------------------------------------------------------
+# bulk CI-gate helpers (stdin, per-CVE rows, --fail-on policy grammar)
+# ---------------------------------------------------------------------------
+
+# ``--fail-on epss>=N`` — a float threshold on the 0-100 EPSS scale. Whitespace
+# around the operator is tolerated (e.g. ``epss >= 50``).
+_FAIL_ON_EPSS_RE = re.compile(r"^epss\s*>=\s*(?P<value>\d+(?:\.\d+)?)$", re.IGNORECASE)
+
+# Severity ranking so ``--fail-on high`` means "HIGH *or worse*" (the intuitive
+# CI gate: fail the build if anything is at least this severe).
+_SEVERITY_ORDER = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+
+
+def _read_cve_ids_from_stdin() -> list[str]:
+    """Read CVE ids from stdin (one per line), mirroring the file parser.
+
+    Blank lines and ``#`` comment lines are skipped, matching
+    :meth:`ReportService.generate_bulk_report_from_file` so ``pocmap bulk -``
+    behaves identically to ``pocmap bulk <file>``.
+    """
+    return [
+        line.strip()
+        for line in sys.stdin.read().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+
+
+def _bulk_cve_row(cve_id: str, entry: Any) -> dict[str, object]:
+    """Flatten a bulk :class:`ReportEntry` into a summary row (CSV/MD/JSON)."""
+    cve = entry.cve_info
+    cvss = cve.cvss
+    return {
+        "cve_id": cve_id,
+        "severity": cvss.severity.value if cvss is not None else "UNKNOWN",
+        "base_score": cvss.base_score if cvss is not None else None,
+        "epss": cve.epss,
+        "kev_status": cve.kev_status,
+        "exploit_count": len(entry.exploits),
+        "vendor": cve.vendor,
+        "product": cve.product,
+        "description": cve.description,
+    }
+
+
+class FailOnError(ValueError):
+    """Raised when a ``--fail-on`` expression is not understood."""
+
+
+def _parse_fail_on(spec: str) -> Callable[[CVEInfo], bool]:
+    """Compile a ``--fail-on`` expression into a per-CVE predicate.
+
+    Grammar (case-insensitive):
+
+    * ``critical`` — CVSS severity is CRITICAL.
+    * ``high`` — CVSS severity is HIGH *or worse* (HIGH/CRITICAL).
+    * ``kev`` — the CVE is in the CISA KEV catalog.
+    * ``epss>=N`` — EPSS score is >= ``N`` on the 0-100 scale (e.g. ``epss>=50``).
+
+    Returns a predicate that is ``True`` for a CVE that trips the gate.
+
+    Raises:
+        FailOnError: If *spec* is not one of the supported forms.
+    """
+    token = spec.strip().lower()
+
+    if token == "kev":
+        return lambda cve: bool(cve.kev_status)
+
+    if token in ("critical", "high"):
+        floor = _SEVERITY_ORDER["CRITICAL" if token == "critical" else "HIGH"]
+
+        def _severity_pred(cve: CVEInfo) -> bool:
+            if cve.cvss is None:
+                return False
+            return _SEVERITY_ORDER.get(cve.cvss.severity.value, 0) >= floor
+
+        return _severity_pred
+
+    match = _FAIL_ON_EPSS_RE.match(token)
+    if match:
+        threshold = float(match.group("value"))
+        return lambda cve: cve.epss is not None and cve.epss >= threshold
+
+    raise FailOnError(
+        f"Unrecognized --fail-on '{spec}'. Use: critical, high, kev, or epss>=N."
+    )
+
+
+def _fail_on_hits(report: Any, predicate: Callable[[CVEInfo], bool]) -> list[str]:
+    """Return the ids of report entries whose CVE trips *predicate* (sorted)."""
+    return sorted(
+        cve_id
+        for cve_id, entry in report.entries.items()
+        if predicate(entry.cve_info)
+    )
+
+
+# ---------------------------------------------------------------------------
+# WATCH-DIFF rendering helpers (latest / discover --diff)
+# ---------------------------------------------------------------------------
+
+
+def _snapshot_record_row(
+    record: SnapshotRecord, *, change: str, reasons: str = ""
+) -> dict[str, object]:
+    """Flatten a :class:`SnapshotRecord` into a diff row (CSV / Markdown)."""
+    return {
+        "change": change,
+        "cve_id": record.cve_id,
+        "reasons": reasons,
+        "severity": record.severity or "UNKNOWN",
+        "base_score": record.base_score,
+        "epss": record.epss,
+        "kev_status": record.kev_status,
+        "has_poc": record.has_poc,
+    }
+
+
+def _record_to_sarif_dict(record: SnapshotRecord) -> dict[str, object]:
+    """Map a :class:`SnapshotRecord` to the CVE-shaped dict the SARIF renderer wants."""
+    return {
+        "id": record.cve_id,
+        "description": "",
+        "cvss": {"base_score": record.base_score, "severity": record.severity or "UNKNOWN"},
+        "epss": record.epss,
+        "kev_status": record.kev_status,
+        "exploit_count": None,
+        "cwes": [],
+    }
+
+
+def _diff_rows(diff: SnapshotDiff) -> list[dict[str, object]]:
+    """Flatten a diff into CSV/Markdown rows: added, then changed, then removed."""
+    rows = [_snapshot_record_row(r, change="added") for r in diff.added]
+    rows.extend(
+        _snapshot_record_row(
+            c.current, change="changed", reasons=", ".join(r.value for r in c.reasons)
+        )
+        for c in diff.changed
+    )
+    rows.extend(_snapshot_record_row(r, change="removed") for r in diff.removed)
+    return rows
+
+
+def _render_diff(diff: SnapshotDiff, fmt: OutputFormat, *, label: str) -> None:
+    """Render a snapshot ``diff`` in the requested ``fmt`` (respects --format).
+
+    ``table`` gets a grouped added/removed/changed view with reasons; ``json``
+    the full ``diff.to_dict()`` envelope; ``csv``/``md`` a flat row per delta;
+    ``sarif`` a log of the added + changed CVEs (the actionable set).
+    """
+    if fmt is OutputFormat.JSON:
+        render(diff.to_dict(), fmt, console=console)
+        return
+    if fmt is OutputFormat.SARIF:
+        actionable = [_record_to_sarif_dict(r) for r in diff.added]
+        actionable.extend(_record_to_sarif_dict(c.current) for c in diff.changed)
+        render(actionable, fmt, console=console)
+        return
+    if fmt in (OutputFormat.CSV, OutputFormat.MARKDOWN):
+        render(_diff_rows(diff), fmt, console=console, title=f"{label} — changes since last run")
+        return
+
+    # Default: a clear Rich table.
+    rprint(f"\n[bold]{label} — changes since last run[/bold]")
+    if diff.is_empty:
+        rprint(f"[dim]No changes ({diff.unchanged} unchanged).[/dim]")
+        return
+    table = Table(show_lines=False, header_style="bold")
+    table.add_column("Change", justify="center")
+    table.add_column("CVE")
+    table.add_column("Severity")
+    table.add_column("EPSS", justify="right")
+    table.add_column("KEV", justify="center")
+    table.add_column("Reasons", overflow="fold")
+    for rec in diff.added:
+        table.add_row(
+            "[green1]added[/green1]", rec.cve_id, rec.severity or "-",
+            _fmt_epss(rec.epss), "yes" if rec.kev_status else "no", "",
+        )
+    for change in diff.changed:
+        cur = change.current
+        table.add_row(
+            "[yellow]changed[/yellow]", cur.cve_id, cur.severity or "-",
+            _fmt_epss(cur.epss), "yes" if cur.kev_status else "no",
+            ", ".join(r.value for r in change.reasons),
+        )
+    for rec in diff.removed:
+        table.add_row(
+            "[red3]removed[/red3]", rec.cve_id, rec.severity or "-",
+            _fmt_epss(rec.epss), "yes" if rec.kev_status else "no", "",
+        )
+    console.print(table)
+    rprint(f"\n[dim]Summary: {diff.summary()}[/dim]")
+
+
+def _fmt_epss(value: float | None) -> str:
+    """Format an EPSS score for a table cell (or ``-`` when unknown)."""
+    return f"{value:.1f}" if value is not None else "-"
+
+
+def _compute_diff(
+    command: str, params: object, models: object
+) -> SnapshotDiff:
+    """Diff a query's *current* result set against its previous snapshot.
+
+    Implements the WATCH-DIFF flow using only the snapshot engine's public API:
+    load the prior snapshot for this query key, persist *models* as the new
+    baseline, reload it as normalized records, and diff the two. Capturing the
+    previous snapshot *before* the save is what makes the reload equal the
+    current set. Pure local computation — no network.
+
+    Args:
+        command: The originating command (``"latest"`` / ``"discover"``).
+        params: The query params that identify this result set (any mapping).
+        models: The current result set (models the snapshot store understands).
+    """
+    key = make_query_key(command, params if isinstance(params, Mapping) else {})
+    previous = load_snapshot(key)
+    persisted: Iterable[Any] = models if isinstance(models, Iterable) else []
+    save_snapshot(key, persisted)
+    current = load_snapshot(key) or []
+    return diff_snapshots(previous, current)
+
+
 def _lookup_json(cve: str, *, language: str | None, limit: int) -> None:
     """JSON view-model path for ``lookup`` — no banner, no spinners, JSON only.
 
@@ -221,6 +461,9 @@ def _lookup_json(cve: str, *, language: str | None, limit: int) -> None:
         except NotFoundError as exc:
             _emit_json_error(exc, category="not_found")
             raise typer.Exit(ExitCode.NOT_FOUND) from exc
+        except OfflineError as exc:
+            _emit_json_error(exc, category="offline")
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
         github_pocs = exploit_svc.find_github_pocs(cve)
         if language:
@@ -284,6 +527,9 @@ def lookup(
         except NotFoundError as exc:
             rprint(f"[red3]Error: {exc}[/red3]")
             raise typer.Exit(ExitCode.NOT_FOUND) from exc
+        except OfflineError as exc:
+            rprint(f"[red3]Offline: {exc}[/red3]")
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
         # Display CVE info
         rprint(format_cve_table(cve_info))
@@ -385,43 +631,145 @@ def lookup(
 
 @app.command()
 def bulk(
-    file: Annotated[Path, typer.Argument(help="File containing CVE IDs (one per line)")],
+    ctx: typer.Context,
+    file: Annotated[
+        Path,
+        typer.Argument(help="File with CVE IDs (one per line), or '-' to read from stdin"),
+    ],
     output: Annotated[Path, typer.Option("--output", "-o", help="Output directory for reports")] = Path("."),
     threads: Annotated[int, typer.Option("--threads", "-t", help="Number of concurrent workers", min=1)] = 10,
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Stdout summary format: table (default), json, csv, sarif"),
+    ] = None,
+    fail_on: Annotated[
+        str | None,
+        typer.Option(
+            "--fail-on",
+            help="Exit nonzero (1) if any CVE matches: critical, high, kev, or epss>=N (e.g. epss>=50)",
+        ),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress decorative output"),
+    ] = False,
 ) -> None:
-    """Process multiple CVEs from a file and generate JSON and HTML reports."""
-    if not file.exists():
-        rprint(f"[red3]File not found: {file}[/red3]")
-        raise typer.Exit(1)
+    """Process multiple CVEs from a file (or stdin) as a composable CI gate.
 
+    Reads CVE IDs from a file, or from **stdin** when ``file`` is ``-`` (so
+    ``... | pocmap bulk -`` works in a pipeline). The default (``table``) format
+    preserves the historical behaviour — it writes a JSON **and** an HTML report
+    to ``--output`` and prints confirmations. The machine formats (``json`` /
+    ``csv`` / ``sarif``) instead emit a clean summary of every CVE to stdout and
+    write no files, so the stream stays parseable in automation.
+
+    ``--fail-on`` turns pocmap into a build gate: if **any** included CVE matches
+    the condition (``critical``, ``high``, ``kev``, or ``epss>=N``) the command
+    exits ``1`` (:attr:`ExitCode.ERROR`); otherwise ``0``. A malformed
+    ``--fail-on`` exits ``4`` (:attr:`ExitCode.INVALID_INPUT`).
+    """
+    fmt, is_quiet = _resolve_output(ctx, output_format, quiet)
+
+    # Validate the --fail-on grammar up front so a typo fails fast (exit 4)
+    # before any (potentially slow) report generation.
+    predicate: Callable[[CVEInfo], bool] | None = None
+    if fail_on is not None:
+        try:
+            predicate = _parse_fail_on(fail_on)
+        except FailOnError as exc:
+            _emit_cli_error(exc, fmt=fmt, category="invalid_input")
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
+
+    from_stdin = str(file) == "-"
+
+    with ReportService() as report_svc:
+        try:
+            if from_stdin:
+                report = report_svc.generate_bulk_report(_read_cve_ids_from_stdin())
+            else:
+                if not file.exists():
+                    rprint(f"[red3]File not found: {file}[/red3]")
+                    raise typer.Exit(ExitCode.INVALID_INPUT)
+                report = report_svc.generate_bulk_report_from_file(file)
+        except typer.Exit:
+            raise
+        except Exception as exc:
+            _emit_cli_error(exc, fmt=fmt, category="unknown")
+            raise typer.Exit(ExitCode.ERROR) from exc
+
+        if not report.entries:
+            if fmt is OutputFormat.TABLE:
+                rprint("[red3]No valid CVE entries found in the report[/red3]")
+                raise typer.Exit(ExitCode.ERROR)
+            # Machine formats: still emit a well-formed empty document.
+            if fmt is OutputFormat.JSON:
+                render({"total": 0, "cves": []}, fmt, console=console)
+            else:
+                render([], fmt, console=console)
+            raise typer.Exit(ExitCode.NO_RESULTS)
+
+        # --fail-on evaluation (shared by every output format).
+        hits = _fail_on_hits(report, predicate) if predicate is not None else []
+        gate_code = ExitCode.ERROR if hits else ExitCode.OK
+
+        if fmt is OutputFormat.TABLE:
+            _bulk_table_output(report_svc, report, output, is_quiet=is_quiet)
+        else:
+            _bulk_machine_output(report, fmt)
+
+        if hits:
+            # Keep the gate note off stdout in machine modes so the stream stays
+            # parseable; CI reads the (nonzero) exit code regardless.
+            err_console.print(
+                f"[red3]--fail-on '{fail_on}' matched {len(hits)} CVE(s): "
+                f"{', '.join(hits)}[/red3]"
+            )
+        raise typer.Exit(gate_code)
+
+
+def _bulk_table_output(
+    report_svc: ReportService,
+    report: Any,
+    output: Path,
+    *,
+    is_quiet: bool,
+) -> None:
+    """Historical ``bulk`` behaviour: write JSON + HTML reports and confirm."""
     try:
         _safe_path(str(output))
     except ValueError as exc:
         rprint(f"[red3]Unsafe output path: {exc}[/red3]")
-        raise typer.Exit(1) from exc
+        raise typer.Exit(ExitCode.INVALID_INPUT) from exc
 
     output.mkdir(parents=True, exist_ok=True)
-
-    with ReportService() as report_svc:
-        try:
-            report = report_svc.generate_bulk_report_from_file(file)
-        except Exception as exc:
-            rprint(f"[red3]Error generating report: {exc}[/red3]")
-            raise typer.Exit(1) from exc
-
-        if not report.entries:
-            rprint("[red3]No valid CVE entries found in the report[/red3]")
-            raise typer.Exit(1)
-
-        # Save JSON
-        json_path = report_svc.save_json_report(report, output)
-        rprint(f"[green1]JSON report saved: {json_path}[/green1]")
-
-        # Save HTML
-        html_path = report_svc.save_html_report(report, output)
-        rprint(f"[green1]HTML report saved: {html_path}[/green1]")
-
+    json_path = report_svc.save_json_report(report, output)
+    rprint(f"[green1]JSON report saved: {json_path}[/green1]")
+    html_path = report_svc.save_html_report(report, output)
+    rprint(f"[green1]HTML report saved: {html_path}[/green1]")
+    if not is_quiet:
         rprint(f"\n[bold]Processed {len(report.entries)} CVE(s)[/bold]")
+
+
+def _bulk_machine_output(report: Any, fmt: OutputFormat) -> None:
+    """Emit a clean stdout summary of a bulk report (json / csv / sarif)."""
+    rows = [_bulk_cve_row(cve_id, entry) for cve_id, entry in report.entries.items()]
+    if fmt is OutputFormat.SARIF:
+        sarif_cves = [
+            _cve_sarif_dict(entry.cve_info, exploit_count=len(entry.exploits))
+            for entry in report.entries.values()
+        ]
+        render(sarif_cves, fmt, console=console)
+        return
+    if fmt is OutputFormat.JSON:
+        report_data = {
+            "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
+            "total": len(rows),
+            "cves": rows,
+        }
+        render(report_data, fmt, console=console)
+        return
+    # csv / md
+    render(rows, fmt, console=console, title="Bulk CVE Report")
 
 
 @app.command()
@@ -696,6 +1044,14 @@ def latest(
     sort: Annotated[str, typer.Option("--sort", help="Sort by: cve_date, severity, epss")] = "cve_date",
     limit: Annotated[int, typer.Option("--limit", help="Max results", min=1, max=100)] = 50,
     output: Annotated[str | None, typer.Option("--output", "-o", help="Save JSON report to file")] = None,
+    diff: Annotated[
+        bool,
+        typer.Option(
+            "--diff",
+            "--since-last",
+            help="Show only what changed since the last identical run (added/removed/changed)",
+        ),
+    ] = False,
     output_format: Annotated[
         OutputFormat | None,
         typer.Option("--format", "-f", help="Output format: table (default), json, csv, md, sarif"),
@@ -771,7 +1127,10 @@ def latest(
             rprint(f"[red3]Error fetching recent CVEs: {exc}[/red3]")
             raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
-    if not results:
+    # An empty result set is only a dead end for a normal run. Under ``--diff`` an
+    # empty *current* against a non-empty baseline is a real delta (everything was
+    # removed), so fall through and let the diff engine report it.
+    if not results and not diff:
         if fmt is OutputFormat.TABLE:
             rprint("[yellow]No CVEs found matching the specified criteria.[/yellow]")
         elif fmt is OutputFormat.JSON:
@@ -814,6 +1173,31 @@ def latest(
         "cves": cve_rows,
     }
 
+    def _write_report_file() -> None:
+        """Persist ``report_data`` to ``--output`` (unchanged JSON contract)."""
+        if not output:
+            return
+        import json as _json
+        try:
+            _safe_path(output)
+        except ValueError as exc:
+            rprint(f"[red3]Unsafe output path: {exc}[/red3]")
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(_json.dumps(report_data, indent=2, default=str), encoding="utf-8")
+        # Keep the confirmation out of machine-readable streams.
+        if fmt is OutputFormat.TABLE and not is_quiet:
+            rprint(f"\n[green1]Report saved to {out_path}[/green1]")
+
+    # --diff: render only the delta vs. the previous identical run, then persist
+    # the current result set as the new baseline. Respects --format.
+    if diff:
+        delta = _compute_diff("latest", report_data["query"], results)
+        _render_diff(delta, fmt, label="Recent CVEs")
+        _write_report_file()
+        raise typer.Exit(ExitCode.OK)
+
     # STDOUT rendering by format (the default table path is byte-for-byte as before).
     if fmt is OutputFormat.TABLE:
         rprint(f"\n[bold]Found {len(results)} recent CVE(s)[/bold]")
@@ -841,19 +1225,7 @@ def latest(
         render(cve_rows, fmt, console=console, title="Recent CVEs")
 
     # Save to file if requested (unchanged JSON content; --format governs stdout).
-    if output:
-        import json as _json
-        try:
-            _safe_path(output)
-        except ValueError as exc:
-            rprint(f"[red3]Unsafe output path: {exc}[/red3]")
-            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
-        output_path = Path(output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(_json.dumps(report_data, indent=2, default=str), encoding="utf-8")
-        # Keep the confirmation out of machine-readable streams.
-        if fmt is OutputFormat.TABLE and not is_quiet:
-            rprint(f"\n[green1]Report saved to {output_path}[/green1]")
+    _write_report_file()
 
 
 @app.command()
@@ -864,6 +1236,14 @@ def discover(
     vendor: Annotated[str | None, typer.Option("--vendor", help="Vendor name (e.g., 'Apache')")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Max CVEs to analyze", min=1, max=100)] = 50,
     output: Annotated[str | None, typer.Option("--output", "-o", help="Save JSON report to file")] = None,
+    diff: Annotated[
+        bool,
+        typer.Option(
+            "--diff",
+            "--since-last",
+            help="Show only what changed since the last identical run (added/removed/changed)",
+        ),
+    ] = False,
     output_format: Annotated[
         OutputFormat | None,
         typer.Option("--format", "-f", help="Output format: table (default), json, csv, md, sarif"),
@@ -949,6 +1329,19 @@ def discover(
         output_path.write_text(_json.dumps(report_data, indent=2, default=str), encoding="utf-8")
         if fmt is OutputFormat.TABLE and not is_quiet:
             rprint(f"\n[green1]Report saved to {output_path}[/green1]")
+
+    # --diff: render only the delta vs. the previous identical run, then persist
+    # the current result set (all tiers) as the new baseline. Respects --format.
+    if diff:
+        all_cves = [cve for _tier, cves in tiers for cve in cves]
+        delta = _compute_diff(
+            "discover",
+            {"product": product, "version": version, "vendor": vendor, "limit": limit},
+            all_cves,
+        )
+        _render_diff(delta, fmt, label=f"Product Discovery: {result.query}")
+        _write_output_file()
+        raise typer.Exit(ExitCode.OK)
 
     # Machine-readable formats: emit the view model, save the file, set exit code.
     if fmt is not OutputFormat.TABLE:
@@ -1395,13 +1788,25 @@ def main(
         OutputFormat,
         typer.Option("--format", "-f", help="Output format for supported commands (table, json)"),
     ] = OutputFormat.TABLE,
+    offline: Annotated[
+        bool,
+        typer.Option(
+            "--offline",
+            help="Serve HTTP only from the cache; a cache miss errors instead of hitting the network",
+        ),
+    ] = False,
     quiet: Annotated[
         bool,
         typer.Option("--quiet", "-q", help="Suppress banner and decorative output"),
     ] = False,
 ) -> None:
     """PocMap: AI-friendly CVE PoC discovery tool."""
-    ctx.obj = CLIState(output_format=output_format, quiet=quiet)
+    # ``--offline`` must take effect process-wide *before* any subcommand runs,
+    # so flip the settings singleton now (see config.enable_offline). Only ever
+    # turn it on here — the env var POCMAP_OFFLINE may already have enabled it.
+    if offline:
+        enable_offline()
+    ctx.obj = CLIState(output_format=output_format, quiet=quiet, offline=offline or settings.offline)
     if version:
         rprint(f"pocmap v{__version__}")
         raise typer.Exit(0)

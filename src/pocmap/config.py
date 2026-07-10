@@ -243,6 +243,26 @@ def _build_settings() -> Settings:
 settings: Settings = _build_settings()
 
 
+def enable_offline(enabled: bool = True) -> None:
+    """Force process-wide offline mode by mutating the ``settings`` singleton.
+
+    This is the last hop for the CLI ``--offline`` flag. ``Settings`` is a
+    ``frozen=True, slots=True`` dataclass, so ``settings.offline = True`` would
+    raise; instead the field is set via :func:`object.__setattr__`, which writes
+    the slot directly and bypasses the frozen ``__setattr__`` guard.
+
+    Crucially the *same* singleton object is mutated in place, so every module
+    that did ``from pocmap.config import settings`` (notably
+    :mod:`pocmap.utils.http`, whose ``HTTPClient._is_offline`` reads
+    ``settings.offline`` at call time) observes the change immediately — no
+    rebinding or client rebuild required. Idempotent; safe to call repeatedly.
+
+    Args:
+        enabled: The value to force onto ``settings.offline`` (default ``True``).
+    """
+    object.__setattr__(settings, "offline", enabled)
+
+
 # ---------------------------------------------------------------------------
 # Credential format validation (offline shape checks used by `pocmap doctor`)
 # ---------------------------------------------------------------------------
