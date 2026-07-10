@@ -117,6 +117,9 @@ class Settings:
         cache_enabled: Whether the persistent HTTP response cache is active.
         cache_ttl: Seconds a cached HTTP response stays fresh.
         cache_max_mb: Total on-disk cache cap in MB before LRU eviction.
+        offline: When ``True``, HTTP GETs are served only from the cache; a
+            cache miss raises a clear offline error instead of hitting the
+            network (``POCMAP_OFFLINE``).
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR).
     """
 
@@ -131,6 +134,7 @@ class Settings:
     cache_enabled: bool = True
     cache_ttl: int = DEFAULT_CACHE_TTL
     cache_max_mb: int = DEFAULT_CACHE_MAX_MB
+    offline: bool = False
     log_level: str = "INFO"
 
     @property
@@ -230,6 +234,7 @@ def _build_settings() -> Settings:
         cache_enabled=_safe_bool(f"{prefix}CACHE_ENABLED", True),
         cache_ttl=_safe_int(f"{prefix}CACHE_TTL", DEFAULT_CACHE_TTL),
         cache_max_mb=_safe_int(f"{prefix}CACHE_MAX_MB", DEFAULT_CACHE_MAX_MB),
+        offline=_safe_bool(f"{prefix}OFFLINE", False),
         log_level=os.getenv(f"{prefix}LOG_LEVEL", "INFO"),
     )
 

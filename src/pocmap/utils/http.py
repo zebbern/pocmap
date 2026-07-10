@@ -217,6 +217,27 @@ class RateLimitError(HTTPError):
     pass
 
 
+class OfflineError(HTTPError):
+    """Raised when offline mode is active and no cached response is available.
+
+    Offline mode (``settings.offline`` / ``POCMAP_OFFLINE`` / a per-client
+    ``HTTPClient(offline=True)``) makes :meth:`HTTPClient.get_json` and
+    :meth:`HTTPClient.get_text` serve *only* from the persistent cache and never
+    touch the network. A cache **hit** is returned as usual; a cache **miss**
+    raises this error instead of silently returning the ``default`` (empty)
+    value — a source that is merely unreachable offline must never be
+    indistinguishable from "no results".
+
+    It subclasses :class:`HTTPError` so existing ``except HTTPError`` handlers
+    keep degrading gracefully, but it is a *distinct* type (and maps to the
+    dedicated ``"offline"`` category via :func:`categorize_exception`) so a
+    caller can tell an offline cache-miss apart from a real network failure or a
+    genuinely empty result.
+    """
+
+    pass
+
+
 class ValidationError(PocMapError):
     """Raised when input validation fails."""
 
@@ -276,6 +297,10 @@ def categorize_exception(exc: BaseException) -> tuple[str, bool]:
     """
     if isinstance(exc, RateLimitError):
         return "rate_limited", True
+    if isinstance(exc, OfflineError):
+        # Distinct from a real network failure: retrying now won't help until
+        # connectivity/offline mode changes, so it is not retryable in-state.
+        return "offline", False
     if isinstance(exc, PermissionError):
         return "permission_error", False
     if isinstance(exc, (TimeoutError, ConnectionError, OSError, HTTPError)):
@@ -394,11 +419,16 @@ class HTTPClient:
         max_retries: int | None = None,
         backoff_factor: float | None = None,
         pool_connections: int = 10,
+        offline: bool | None = None,
     ) -> None:
         self.headers = headers or settings.default_headers
         self.timeout = timeout or settings.http_timeout
         self.max_retries = max_retries or settings.max_retries
         self.backoff_factor = backoff_factor or settings.backoff_factor
+        # ``None`` -> defer to the process-wide ``settings.offline`` at call
+        # time (so a future ``--offline`` flag / ``POCMAP_OFFLINE`` can switch it
+        # on); an explicit bool forces offline on/off for just this client.
+        self._offline_override = offline
 
         retry_strategy = Retry(
             total=self.max_retries,
@@ -436,6 +466,18 @@ class HTTPClient:
             raise HTTPError(
                 f"SSRF: host resolves to a non-public address: {url}", url=url
             )
+
+    def _is_offline(self) -> bool:
+        """Return whether this client must serve from cache only (no network).
+
+        A per-client override (``HTTPClient(offline=...)``) wins; otherwise the
+        process-wide :data:`pocmap.config.settings.offline` is read *at call
+        time* so a future ``--offline`` CLI flag / ``POCMAP_OFFLINE`` can toggle
+        it without rebuilding the client.
+        """
+        if self._offline_override is not None:
+            return self._offline_override
+        return settings.offline
 
     def post_json(
         self,
@@ -583,16 +625,24 @@ class HTTPClient:
             Parsed JSON data, or *default* if parsing fails.
         """
         cache = _get_cache()
+        offline = self._is_offline()
         cache_key: str | None = None
         if cache.enabled and not no_cache:
             cache_key = HTTPCache.make_key("GET", url, params)
-            cached_body = cache.get(cache_key)
+            # Offline reads are side-effect-free (peek); online keeps the
+            # mutating LRU read (get) so cache behavior is otherwise unchanged.
+            cached_body = cache.peek(cache_key) if offline else cache.get(cache_key)
             if cached_body is not None:
                 try:
                     return json.loads(cached_body)
                 except (ValueError, TypeError):
                     logger.warning("Discarding corrupt cached JSON for %s", url)
-                    # fall through to a live fetch
+                    # fall through: refetch when online; offline-miss when not
+        if offline:
+            # Serve only from cache; never hit the network. A miss (incl. a
+            # disabled cache or no_cache=True) is a clear, categorized error,
+            # never a silent empty ``default``.
+            raise OfflineError(f"offline: no cached response for {url}", url=url)
 
         resp = self.get(url, headers=headers, params=params, timeout=timeout, **kwargs)
         if resp.status_code == 404:
@@ -636,12 +686,20 @@ class HTTPClient:
             Response body text, or *default* on failure.
         """
         cache = _get_cache()
+        offline = self._is_offline()
         cache_key: str | None = None
         if cache.enabled and not no_cache:
             cache_key = HTTPCache.make_key("GET", url, params)
-            cached_body = cache.get(cache_key)
+            # Offline reads are side-effect-free (peek); online keeps the
+            # mutating LRU read (get) so cache behavior is otherwise unchanged.
+            cached_body = cache.peek(cache_key) if offline else cache.get(cache_key)
             if cached_body is not None:
                 return cached_body
+        if offline:
+            # Serve only from cache; never hit the network. A miss (incl. a
+            # disabled cache or no_cache=True) is a clear, categorized error,
+            # never a silent empty ``default``.
+            raise OfflineError(f"offline: no cached response for {url}", url=url)
 
         resp = self.get(url, headers=headers, params=params, timeout=timeout, **kwargs)
         if resp.status_code == 404:

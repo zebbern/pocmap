@@ -124,6 +124,29 @@ class HTTPCache:
 
         Corrupt, partial, or expired entries are removed as a side effect and
         reported as a miss so the caller transparently falls back to the network.
+        A read hit refreshes the entry's mtime so eviction approximates LRU.
+        """
+        return self._read(key, mutate=True)
+
+    def peek(self, key: str) -> str | None:
+        """Read-only presence check for a fresh cached body (offline path).
+
+        Returns the body on a fresh hit and ``None`` when absent — i.e. missing,
+        expired, or corrupt — so a caller can distinguish "present" from
+        "absent" without falling back to the network. Unlike :meth:`get` this is
+        **side-effect free**: it never deletes expired/corrupt entries and never
+        bumps the mtime. Offline mode uses it because a ``None`` here means
+        "raise a cache-miss (offline)", not "refetch"; entries are left on disk
+        for a later online run to reuse or refresh.
+        """
+        return self._read(key, mutate=False)
+
+    def _read(self, key: str, *, mutate: bool) -> str | None:
+        """Shared read for :meth:`get` (``mutate=True``) and :meth:`peek`.
+
+        When *mutate* is ``True`` (the :meth:`get` contract) corrupt/expired
+        entries are purged on access and a hit refreshes the mtime for LRU;
+        when ``False`` (the :meth:`peek` contract) the read has no side effects.
         """
         if not self.enabled:
             return None
@@ -138,27 +161,32 @@ class HTTPCache:
         try:
             entry = json.loads(raw)
         except (ValueError, TypeError):
-            self._safe_unlink(path)  # corrupt -> discard + miss
+            if mutate:
+                self._safe_unlink(path)  # corrupt -> discard + miss
             return None
         if not isinstance(entry, dict):
-            self._safe_unlink(path)
+            if mutate:
+                self._safe_unlink(path)
             return None
 
         created = entry.get("created")
         body = entry.get("body")
         if not isinstance(created, (int, float)) or not isinstance(body, str):
-            self._safe_unlink(path)
+            if mutate:
+                self._safe_unlink(path)
             return None
 
         ttl_raw = entry.get("ttl", self.ttl)
         ttl = ttl_raw if isinstance(ttl_raw, (int, float)) else self.ttl
         if ttl >= 0 and (time.time() - created) > ttl:
-            self._safe_unlink(path)  # expired -> discard + miss
+            if mutate:
+                self._safe_unlink(path)  # expired -> discard + miss
             return None
 
-        # Read hit: refresh mtime so eviction approximates LRU (best-effort).
-        with contextlib.suppress(OSError):
-            os.utime(path, None)
+        if mutate:
+            # Read hit: refresh mtime so eviction approximates LRU (best-effort).
+            with contextlib.suppress(OSError):
+                os.utime(path, None)
         return body
 
     def set(
