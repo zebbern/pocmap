@@ -37,7 +37,12 @@ from pocmap.services.bb_service import BugBountyService
 from pocmap.services.cve_service import CVEService
 from pocmap.services.exploit_service import ExploitService
 from pocmap.services.lab_service import LabService
-from pocmap.utils.http import NotFoundError, ValidationError, is_programming_error
+from pocmap.utils.http import (
+    NotFoundError,
+    OfflineError,
+    ValidationError,
+    is_programming_error,
+)
 from pocmap.utils.validators import validate_cve_id
 
 # ---------------------------------------------------------------------------
@@ -196,7 +201,10 @@ class ReportService:
                 logger.warning("Skipping %s: %s", cve_id, exc)
                 continue
             except Exception as exc:
-                if is_programming_error(exc):
+                # Offline cache-miss must abort the whole bulk run distinctly
+                # rather than silently skipping every CVE (which would look like
+                # "no valid entries"); a programming bug likewise must surface.
+                if is_programming_error(exc) or isinstance(exc, OfflineError):
                     raise
                 logger.error("Error processing %s: %s", cve_id, exc)
                 continue

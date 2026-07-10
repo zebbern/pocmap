@@ -5,7 +5,7 @@ Covers the three roadmap items wired into ``pocmap.cli``:
   * **STDIN-BULK-CI** — ``bulk -`` reads CVE ids from stdin; ``bulk --format
     {json,csv,sarif}`` emits a clean stdout summary; ``bulk --fail-on
     {critical,high,kev,epss>=N}`` turns pocmap into a build gate that exits
-    nonzero (``ExitCode.ERROR`` = 1) on a match and ``0`` otherwise; a malformed
+    ``POLICY_FAIL`` (6) on a match and ``0`` otherwise; a malformed
     ``--fail-on`` exits ``INVALID_INPUT`` (4).
   * **WATCH-DIFF** — ``latest --diff`` reports every CVE as *added* on the first
     run (no baseline) and reports the delta (e.g. a KEV flip) on the second run,
@@ -143,7 +143,7 @@ def test_bulk_dash_skips_blank_and_comment_lines(monkeypatch: pytest.MonkeyPatch
 
 
 def test_bulk_fail_on_kev_hit_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A KEV CVE in the set trips ``--fail-on kev`` -> exit 1 (ExitCode.ERROR)."""
+    """A KEV CVE in the set trips ``--fail-on kev`` -> exit 6 (ExitCode.POLICY_FAIL)."""
     monkeypatch.setattr(
         ReportService,
         "generate_bulk_report",
@@ -157,7 +157,7 @@ def test_bulk_fail_on_kev_hit_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> 
     result = runner.invoke(
         app, ["bulk", "-", "--format", "json", "--fail-on", "kev"], input="x\n"
     )
-    assert result.exit_code == ExitCode.ERROR  # 1
+    assert result.exit_code == ExitCode.POLICY_FAIL  # 6
     # stdout stays parseable JSON; the gate note is on stderr.
     data = json.loads(result.stdout)
     assert data["total"] == 2
@@ -197,7 +197,7 @@ def test_bulk_fail_on_epss_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     hit = runner.invoke(
         app, ["bulk", "-", "--format", "json", "--fail-on", "epss>=50"], input="x\n"
     )
-    assert hit.exit_code == ExitCode.ERROR
+    assert hit.exit_code == ExitCode.POLICY_FAIL
 
 
 def test_bulk_fail_on_high_matches_critical(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -210,7 +210,7 @@ def test_bulk_fail_on_high_matches_critical(monkeypatch: pytest.MonkeyPatch) -> 
     result = runner.invoke(
         app, ["bulk", "-", "--format", "json", "--fail-on", "high"], input="x\n"
     )
-    assert result.exit_code == ExitCode.ERROR
+    assert result.exit_code == ExitCode.POLICY_FAIL
 
 
 def test_bulk_bad_fail_on_exits_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:

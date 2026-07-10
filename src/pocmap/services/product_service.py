@@ -27,7 +27,7 @@ from pocmap.models import (
     ProductDiscoveryResult,
     VersionConstraint,
 )
-from pocmap.utils.http import HTTPClient, HTTPError, is_programming_error
+from pocmap.utils.http import HTTPClient, HTTPError, OfflineError, is_programming_error
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +318,10 @@ class ProductDiscoveryService:
                     headers=headers,
                     params=params,
                 )
+            except OfflineError:
+                # Offline cache-miss must surface, not degrade to an empty result
+                # set (which would read as "no CVEs for this product").
+                raise
             except HTTPError as exc:
                 logger.warning(
                     "NVD keyword search failed for %r (startIndex=%d): %s",

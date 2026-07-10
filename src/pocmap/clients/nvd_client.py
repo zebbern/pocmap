@@ -13,7 +13,7 @@ from typing import Any
 
 from pocmap.config import NVD_API_BASE, settings
 from pocmap.models import CVSSScore, CVSSVersion
-from pocmap.utils.http import HTTPClient, HTTPError
+from pocmap.utils.http import HTTPClient, HTTPError, OfflineError
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,9 @@ class NVDClient:
             if data and data.get("totalResults", 0) > 0:
                 cve = data["vulnerabilities"][0]["cve"]
                 return cve if isinstance(cve, dict) else None
+        except OfflineError:
+            # Offline cache-miss must surface, not degrade to None ("no data").
+            raise
         except HTTPError:
             # SECURITY: strip apiKey from any logged URL before logging
             safe_cve_id = cve_id.upper()

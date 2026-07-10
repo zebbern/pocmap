@@ -19,7 +19,14 @@ from pocmap.config import (
     SHODAN_CVEDB_URL,
     settings,
 )
-from pocmap.utils.http import HTTPClient, HTTPError, fetch_json, fetch_text, is_programming_error
+from pocmap.utils.http import (
+    HTTPClient,
+    HTTPError,
+    OfflineError,
+    fetch_json,
+    fetch_text,
+    is_programming_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +72,9 @@ class CVEOrgClient:
             data = self._client.get_json(url, headers=settings.github_headers)
             if isinstance(data, dict):
                 return self._parse_record(data)
+        except OfflineError:
+            # Offline cache-miss must surface, not degrade to "not found".
+            raise
         except HTTPError:
             logger.debug("CVE.org record not found for %s", cve_id)
 
@@ -193,6 +203,8 @@ class CVEOrgClient:
                     "vendor": None,
                     "affected_product": None,
                 }
+        except OfflineError:
+            raise
         except HTTPError:
             pass
         return None
@@ -229,7 +241,7 @@ class CVEOrgClient:
             if text:
                 self._epss_cache = list(csv.DictReader(text.splitlines()))
         except Exception as exc:
-            if is_programming_error(exc):
+            if is_programming_error(exc) or isinstance(exc, OfflineError):
                 raise
             logger.warning("Failed to load EPSS cache: %s", exc)
             self._epss_cache = []
@@ -242,6 +254,8 @@ class CVEOrgClient:
             if data and data.get("data"):
                 epss_value = float(data["data"][0]["epss"])
                 return math.trunc(epss_value * 10000) / 100
+        except OfflineError:
+            raise
         except (HTTPError, KeyError, ValueError, TypeError, IndexError) as exc:
             logger.debug("FIRST EPSS API failed for %s: %s", cve_id, exc)
         return None
@@ -260,6 +274,8 @@ class CVEOrgClient:
             if data and "vulnerabilities" in data:
                 self._kev_cache = data["vulnerabilities"]
                 return self._kev_cache
+        except OfflineError:
+            raise
         except HTTPError as exc:
             logger.warning("Failed to load CISA KEV: %s", exc)
 
@@ -298,6 +314,8 @@ class CVEOrgClient:
             if data and "ransomware_campaign" in data:
                 campaign = data["ransomware_campaign"]
                 return str(campaign) if campaign else "N/A"
+        except OfflineError:
+            raise
         except HTTPError:
             pass
         return "N/A"
@@ -339,7 +357,7 @@ class CVEOrgClient:
                 if ghsa_links:
                     refs["GHSA"] = "\n".join(ghsa_links)
         except Exception as exc:
-            if is_programming_error(exc):
+            if is_programming_error(exc) or isinstance(exc, OfflineError):
                 raise
             logger.debug("GHSA reference lookup failed for %s: %s", cve_id, exc)
 
@@ -383,6 +401,8 @@ class CVEOrgClient:
                     urls = [ref["url"] for ref in cna_refs if "url" in ref]
                     if urls:
                         refs["Advisories"] = "\n".join(urls)
+        except OfflineError:
+            raise
         except HTTPError:
             pass
 
@@ -409,6 +429,8 @@ class CVEOrgClient:
                     if descriptions:
                         value = descriptions[0].get("value")
                         return value if isinstance(value, str) else None
+            except OfflineError:
+                raise
             except HTTPError:
                 pass
 
@@ -424,6 +446,8 @@ class CVEOrgClient:
                     if desc.get("lang") == "en":
                         value = desc.get("value")
                         return value if isinstance(value, str) else None
+        except OfflineError:
+            raise
         except HTTPError:
             pass
 

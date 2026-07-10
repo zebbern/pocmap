@@ -38,7 +38,7 @@ from pocmap.models import (
     RecentExploitResult,
     Severity,
 )
-from pocmap.utils.http import HTTPClient, HTTPError, is_programming_error
+from pocmap.utils.http import HTTPClient, HTTPError, OfflineError, is_programming_error
 
 logger = logging.getLogger(__name__)
 
@@ -420,6 +420,10 @@ class RecentService:
 
                 start_index += len(vulnerabilities)
 
+            except OfflineError:
+                # Offline cache-miss must surface, not degrade to an empty window
+                # (which would read as "no recent CVEs" instead of "offline").
+                raise
             except HTTPError as exc:
                 logger.warning(
                     "NVD API request failed (startIndex=%d): %s",
@@ -463,7 +467,7 @@ class RecentService:
             try:
                 cve.epss = self._cveorg.get_epss(cve.id)
             except Exception as exc:  # pragma: no cover - defensive
-                if is_programming_error(exc):
+                if is_programming_error(exc) or isinstance(exc, OfflineError):
                     raise
                 logger.debug("EPSS lookup failed for %s: %s", cve.id, exc)
         return cves
@@ -512,7 +516,7 @@ class RecentService:
                 pocs = self._github.search_pocs(cve.id)
                 return cve if pocs else None
             except Exception as exc:
-                if is_programming_error(exc):
+                if is_programming_error(exc) or isinstance(exc, OfflineError):
                     raise
                 logger.debug("PoC check failed for %s: %s", cve.id, exc)
                 return None
@@ -607,7 +611,7 @@ class RecentService:
             if github_pocs:
                 sources.append(ExploitSource.GITHUB)
         except Exception as exc:
-            if is_programming_error(exc):
+            if is_programming_error(exc) or isinstance(exc, OfflineError):
                 raise
             logger.debug("GitHub PoC check failed for %s: %s", cve_id, exc)
 

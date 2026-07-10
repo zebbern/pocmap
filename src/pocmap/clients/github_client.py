@@ -17,7 +17,7 @@ from pocmap.config import (
     settings,
 )
 from pocmap.models import Exploit, ExploitSource
-from pocmap.utils.http import HTTPClient, HTTPError, RateLimitError
+from pocmap.utils.http import HTTPClient, HTTPError, OfflineError, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,9 @@ class GitHubClient:
             # Propagate throttling so the aggregator reports RATE_LIMITED rather
             # than treating a rate-limited GitHub as "no PoCs found".
             raise
+        except OfflineError:
+            # Likewise, an offline cache-miss must surface, not read as "no PoCs".
+            raise
         except HTTPError:
             logger.debug("Nomi-sec lookup failed for %s", cve_id)
 
@@ -93,6 +96,8 @@ class GitHubClient:
                 exploits.sort(key=lambda x: (x.stars or 0, x.forks or 0), reverse=True)
                 return exploits
         except RateLimitError:
+            raise
+        except OfflineError:
             raise
         except HTTPError:
             logger.debug("TrickestCVE lookup failed for %s", cve_id)
@@ -171,6 +176,8 @@ class GitHubClient:
             data = self._client.get_json(url, headers=settings.github_headers)
             if isinstance(data, dict) and "html_url" in data:
                 return data
+        except OfflineError:
+            raise
         except HTTPError as exc:
             if exc.status_code == 404:
                 return None
@@ -210,6 +217,8 @@ class GitHubClient:
                     md = markdown(text)
                     soup = BeautifulSoup(md, "html.parser")
                     return soup.get_text()
+            except OfflineError:
+                raise
             except HTTPError:
                 continue
         return ""

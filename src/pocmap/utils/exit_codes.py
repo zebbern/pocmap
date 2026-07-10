@@ -23,6 +23,8 @@ Code    Name                        Meaning
                                     (e.g. a bad CVE ID or unsafe path).
 ``5``   :attr:`ExitCode.UPSTREAM_ERROR`  A dependency/upstream data source
                                     failed (network error, rate limit, 5xx).
+``6``   :attr:`ExitCode.POLICY_FAIL`  A ``--fail-on`` policy condition matched
+                                    (the command ran fine; the CI gate tripped).
 ======  ==========================  ============================================
 
 The values are stable public contract: never renumber an existing code. New
@@ -61,3 +63,11 @@ class ExitCode(IntEnum):
 
     UPSTREAM_ERROR = 5
     """An upstream data source failed (network error, rate limit, 5xx)."""
+
+    POLICY_FAIL = 6
+    """A ``--fail-on`` policy condition matched (the CI gate tripped).
+
+    Distinct from :attr:`ERROR` (1) so a build script can tell a *policy match*
+    ("a KEV/critical CVE was present, fail the build") apart from an operational
+    failure. ``0`` still means the gate was evaluated and nothing matched.
+    """

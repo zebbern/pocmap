@@ -185,6 +185,31 @@ def _emit_cli_error(exc: Exception, *, fmt: OutputFormat, category: str) -> None
         rprint(f"[red3]Error: {exc}[/red3]")
 
 
+# The one, consistent message shown when ``--offline`` hits a cold cache. An
+# offline cache-miss must read as its own thing (UPSTREAM_ERROR, exit 5), never
+# as "not found" (3) or "no results" (2) — a source that is merely unreachable
+# offline is not the same as one that genuinely has nothing.
+_OFFLINE_HINT = (
+    "Offline: no cached data for this query. Run online once to populate the "
+    "cache, or drop --offline."
+)
+
+
+def _offline_exit(exc: Exception, *, fmt: OutputFormat) -> typer.Exit:
+    """Report an :class:`OfflineError` cleanly and return the exit to raise.
+
+    JSON mode emits the categorized error object (``category == "offline"``);
+    every other mode prints the human-readable :data:`_OFFLINE_HINT`. Either way
+    the command exits :attr:`ExitCode.UPSTREAM_ERROR` (5) with no traceback,
+    mirroring how ``lookup`` already surfaces offline.
+    """
+    if fmt is OutputFormat.JSON:
+        _emit_json_error(exc, category="offline")
+    else:
+        rprint(f"[red3]{_OFFLINE_HINT}[/red3]")
+    return typer.Exit(ExitCode.UPSTREAM_ERROR)
+
+
 def _cve_sarif_dict(cve: CVEInfo, *, exploit_count: int | None) -> dict[str, object]:
     """Map a :class:`CVEInfo` to the CVE-shaped dict the SARIF renderer expects."""
     cvss = cve.cvss
@@ -646,7 +671,7 @@ def bulk(
         str | None,
         typer.Option(
             "--fail-on",
-            help="Exit nonzero (1) if any CVE matches: critical, high, kev, or epss>=N (e.g. epss>=50)",
+            help="Exit 6 (POLICY_FAIL) if any CVE matches: critical, high, kev, or epss>=N (e.g. epss>=50)",
         ),
     ] = None,
     quiet: Annotated[
@@ -665,7 +690,7 @@ def bulk(
 
     ``--fail-on`` turns pocmap into a build gate: if **any** included CVE matches
     the condition (``critical``, ``high``, ``kev``, or ``epss>=N``) the command
-    exits ``1`` (:attr:`ExitCode.ERROR`); otherwise ``0``. A malformed
+    exits ``6`` (:attr:`ExitCode.POLICY_FAIL`); otherwise ``0``. A malformed
     ``--fail-on`` exits ``4`` (:attr:`ExitCode.INVALID_INPUT`).
     """
     fmt, is_quiet = _resolve_output(ctx, output_format, quiet)
@@ -693,6 +718,8 @@ def bulk(
                 report = report_svc.generate_bulk_report_from_file(file)
         except typer.Exit:
             raise
+        except OfflineError as exc:
+            raise _offline_exit(exc, fmt=fmt) from exc
         except Exception as exc:
             _emit_cli_error(exc, fmt=fmt, category="unknown")
             raise typer.Exit(ExitCode.ERROR) from exc
@@ -708,9 +735,11 @@ def bulk(
                 render([], fmt, console=console)
             raise typer.Exit(ExitCode.NO_RESULTS)
 
-        # --fail-on evaluation (shared by every output format).
+        # --fail-on evaluation (shared by every output format). A match is a
+        # distinct POLICY_FAIL (6), not a generic ERROR (1), so CI can tell a
+        # tripped gate apart from an operational failure. No match -> OK (0).
         hits = _fail_on_hits(report, predicate) if predicate is not None else []
-        gate_code = ExitCode.ERROR if hits else ExitCode.OK
+        gate_code = ExitCode.POLICY_FAIL if hits else ExitCode.OK
 
         if fmt is OutputFormat.TABLE:
             _bulk_table_output(report_svc, report, output, is_quiet=is_quiet)
@@ -796,7 +825,10 @@ def labs(
             _emit_cli_error(exc, fmt=fmt, category="invalid_input")
             raise typer.Exit(ExitCode.INVALID_INPUT) from exc
 
-        results = service.find_labs(cve)
+        try:
+            results = service.find_labs(cve)
+        except OfflineError as exc:
+            raise _offline_exit(exc, fmt=fmt) from exc
 
     if not results:
         if fmt is OutputFormat.TABLE:
@@ -845,7 +877,10 @@ def bugbounty(
             _emit_cli_error(exc, fmt=fmt, category="invalid_input")
             raise typer.Exit(ExitCode.INVALID_INPUT) from exc
 
-        results = service.find_reports(cve)
+        try:
+            results = service.find_reports(cve)
+        except OfflineError as exc:
+            raise _offline_exit(exc, fmt=fmt) from exc
 
     if not results:
         if fmt is OutputFormat.TABLE:
@@ -893,7 +928,10 @@ def cpes(
             _emit_cli_error(exc, fmt=fmt, category="invalid_input")
             raise typer.Exit(ExitCode.INVALID_INPUT) from exc
 
-        cpe_list = service.get_cpes(cve)
+        try:
+            cpe_list = service.get_cpes(cve)
+        except OfflineError as exc:
+            raise _offline_exit(exc, fmt=fmt) from exc
 
     if not cpe_list:
         if fmt is OutputFormat.TABLE:
@@ -964,6 +1002,8 @@ def cpe2cve(
         except ValidationError as exc:
             _emit_cli_error(exc, fmt=fmt, category="invalid_input")
             raise typer.Exit(ExitCode.INVALID_INPUT) from exc
+        except OfflineError as exc:
+            raise _offline_exit(exc, fmt=fmt) from exc
 
     if not cve_ids:
         if fmt is OutputFormat.TABLE:
@@ -1123,6 +1163,8 @@ def latest(
         except ValueError as exc:
             rprint(f"[red3]Error: {exc}[/red3]")
             raise typer.Exit(ExitCode.INVALID_INPUT) from exc
+        except OfflineError as exc:
+            raise _offline_exit(exc, fmt=fmt) from exc
         except Exception as exc:
             rprint(f"[red3]Error fetching recent CVEs: {exc}[/red3]")
             raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
@@ -1288,6 +1330,8 @@ def discover(
                 vendor=vendor,
                 limit=limit,
             )
+        except OfflineError as exc:
+            raise _offline_exit(exc, fmt=fmt) from exc
         except Exception as exc:
             rprint(f"[red3]Error: {exc}[/red3]")
             raise typer.Exit(1) from exc
