@@ -13,39 +13,51 @@ AI-agent-optimized CVE exploit discovery toolkit for bug bounty hunters and secu
 - **Structured Pydantic Models**: All data validated and serialized with full type safety and JSON Schema support
 - **MCP Server Integration**: 19 AI-native tools via Model Context Protocol for Claude Desktop, Cursor, and other AI agents
 - **Bug Bounty Toolkit**: Complete hunter toolkit with checklists, workflows, report templates, prioritization engine, and scope management
-- **Rich CLI**: Interactive terminal interface with colorized tables, progress bars, and bulk processing
+- **Rich CLI**: 12 commands with colorized tables, progress bars, and bulk processing
+- **Composable Output**: `table`, `json`, `csv`, `md`, and `sarif` output on read commands, plus a stable [exit-code contract](#output-formats--exit-codes) for scripting and CI
+- **CI Security Gate**: `bulk --fail-on kev|critical|high|epss>=N` fails the build on policy matches and emits SARIF 2.1.0 for GitHub code scanning
+- **Caching & Offline Mode**: persistent, TTL'd HTTP response cache and a first-class `--offline` mode for air-gapped or repeatable runs
+- **Snapshot Diffs**: `latest`/`discover --diff` show only what changed since the last identical run
 - **Concurrent Processing**: Thread pool-based bulk CVE processing with exponential backoff retry logic
-- **Report Generation**: Interactive HTML reports with DataTables, JSON export, and self-contained CSS
+- **Report Generation**: Self-contained HTML reports (styled cards and tables, inline CSS, no external assets or JS) plus JSON export
 - **Security-Hardened**: SSRF protection, sandboxed Jinja2 templates, path traversal prevention, input validation
 
 ## Installation
 
-```bash
-# Install from PyPI
-pip install pocmap
+PocMap is **not yet published to PyPI** — install from source in editable mode.
+(PyPI / `pipx install pocmap` is planned via release automation; until then use the
+`git clone` flow below.)
 
-# Or install in development mode
+```bash
+# Install from source (editable)
 git clone https://github.com/zebbern/pocmap.git
 cd pocmap
 pip install -e .
 
+# With the MCP server (FastMCP SDK — required to run mcp_server.py)
+pip install -e ".[server]"
+
 # With async support
 pip install -e ".[async]"
 
-# With development dependencies
+# With development dependencies (pytest, mypy, ruff)
 pip install -e ".[dev]"
 
 # Verify installation
-pocmap --version
+pocmap --version        # -> pocmap v2.0.0
 ```
 
+Every command is also available as `python -m pocmap ...` if the `pocmap` script is
+not on your `PATH`.
+
 **Requirements:**
-- Python 3.10+
+- Python 3.10+ (developed/verified on 3.12)
 - Dependencies: pydantic>=2.0, requests>=2.28, typer>=0.9, rich>=13.0
 
 **Optional:**
 - `GITHUB_API_TOKEN` - GitHub PAT for higher rate limits (recommended)
 - `NVD_API_KEY` - NVD API key for increased rate limits
+- The `[server]` extra (FastMCP SDK) is required only for the MCP server
 
 ## Quick Start
 
@@ -89,9 +101,48 @@ pocmap discover "Apache Struts"
 # Discover CVEs for a specific product version
 pocmap discover "Log4j" --version 2.x
 
+# Machine-readable output (any read command): table (default), json, csv, md, sarif
+pocmap lookup CVE-2021-44228 --format json
+pocmap latest --since 7d --format sarif --output out/
+
+# Use pocmap as a CI gate (exit 6 if any CVE is in CISA KEV)
+pocmap bulk cves.txt --format sarif --fail-on kev
+
+# Only show what changed since the last identical run
+pocmap latest --since 24h --diff
+
+# Run self-diagnostics and inspect/clear the response cache
+pocmap doctor
+pocmap cache info
+pocmap cache clear
+
+# Serve everything from the local cache (no network)
+pocmap --offline lookup CVE-2021-44228
+
 # Show help with all options
 pocmap --help
 ```
+
+### CLI Commands (12)
+
+| Command | Purpose |
+|---------|---------|
+| `lookup` | Look up a single CVE plus discovered PoCs, DB exploits, and labs |
+| `bulk` | Process many CVEs from a file or stdin; JSON/HTML reports and CI gate |
+| `labs` | Find CTF labs and vulnerable environments for a CVE |
+| `bugbounty` | Find bug bounty reports / write-ups for a CVE |
+| `cpes` | List affected CPE identifiers for a CVE |
+| `cpe2cve` | List CVE IDs affecting a CPE identifier |
+| `readme` | Print a GitHub repo's README |
+| `schemas` | Export JSON schemas for all data models |
+| `latest` | Find recently published CVEs with exploit intelligence |
+| `discover` | Discover CVEs affecting a product by name and version |
+| `doctor` | Run self-diagnostics (Python, extras, tokens, cache, connectivity) |
+| `cache` | Inspect (`info`) and clear (`clear`) the persistent HTTP cache |
+
+Global options (on `pocmap` itself, before the command): `--format/-f {table,json,csv,md,sarif}`,
+`--offline`, `--quiet/-q`, `--version/-v`. Read commands also accept `--format`/`--quiet` locally,
+which override the global value.
 
 ## Python API
 
@@ -370,7 +421,10 @@ pocmap latest --since 7d --severity critical --only-with-poc --limit 10 --output
 | `--severity` | Comma-separated severities: `critical`, `high`, `medium`, `low` |
 | `--sort` | Sort by: `cve_date`, `severity`, or `epss` |
 | `--limit` | Maximum results (1-100, default: 50) |
-| `--output` | Save JSON report to file |
+| `--output`, `-o` | Save JSON report to file |
+| `--diff`, `--since-last` | Show only what changed since the last identical run (added/removed/changed) |
+| `--format`, `-f` | Output format: `table` (default), `json`, `csv`, `md`, `sarif` |
+| `--quiet`, `-q` | Suppress decorative output |
 
 **Output includes:** CVE ID, description, CVSS severity/score, EPSS, KEV status, vendor, product, publication date, PoC availability, and PoC source counts.
 
@@ -405,6 +459,9 @@ pocmap discover "Apache Struts" --version 2.x --output ./struts-cves.json
 | `--vendor` | Vendor name hint: `apache`, `microsoft`, `google` |
 | `--limit` | Maximum CVEs to analyze (1-100, default: 50) |
 | `--output`, `-o` | Save JSON report to file |
+| `--diff`, `--since-last` | Show only what changed since the last identical run (added/removed/changed) |
+| `--format`, `-f` | Output format: `table` (default), `json`, `csv`, `md`, `sarif` |
+| `--quiet`, `-q` | Suppress decorative output |
 
 ### Product Alias System
 
@@ -445,6 +502,128 @@ Results are grouped into three confidence tiers:
 - **Confirmed**: Vendor AND product match AND version constraint is met
 - **Possibly**: Vendor OR product matches but version info is unclear
 - **Not enough data**: CVE has insufficient product/version information
+
+## Output Formats & Exit Codes
+
+Read commands emit machine-readable output via `--format/-f`. `--format` and `--quiet/-q`
+can be set globally (before the command) or per command (the local value wins).
+
+```bash
+pocmap lookup CVE-2021-44228 --format json      # structured view model to stdout
+pocmap latest --since 7d --format csv           # spreadsheet-ready rows
+pocmap discover "Log4j" --format md             # Markdown table for tickets/wikis
+pocmap latest --since 24h --format sarif        # SARIF 2.1.0 for code scanning
+pocmap -f json latest --since 7d                # global form
+```
+
+| Format | Value | Notes |
+|--------|-------|-------|
+| Table | `table` | Default. Rich colorized tables (human-facing). |
+| JSON | `json` | JSON-serializable view model to stdout, nothing else. |
+| CSV | `csv` | One row per record (`csv.DictReader`-friendly). |
+| Markdown | `md` | A Markdown table for tickets/wikis. |
+| SARIF | `sarif` | SARIF 2.1.0 log for CI code scanning. |
+
+**Format support by command:**
+- `lookup`, `doctor`, `cache info`, `cache clear`: `table`, `json`
+- `labs`, `bugbounty`, `cpes`, `cpe2cve`: `table`, `json`, `csv`, `md`
+- `latest`, `discover`: `table`, `json`, `csv`, `md`, `sarif`
+- `bulk`: `table` (writes JSON + HTML files), `json`, `csv`, `sarif`
+
+SARIF results are keyed on CVE IDs, so it is available only on the CVE-list commands
+(`latest`, `discover`, `bulk`). Requesting `--format sarif` on any other command exits
+`4` (invalid input) with a clear message. Severity maps to SARIF levels as
+`critical`/`high` -> `error`, `medium` -> `warning`, `low` -> `note`; EPSS, KEV, exploit
+count, and CVSS ride along in `result.properties`, and each CVE's NVD page is the rule `helpUri`.
+
+### Exit-Code Contract
+
+Every command returns a stable, documented exit code (see `src/pocmap/utils/exit_codes.py`)
+so scripts and CI can react to *why* a command stopped, not just whether it succeeded:
+
+| Code | Name | Meaning |
+|------|------|---------|
+| `0` | `OK` | Success — the command ran and produced output. |
+| `1` | `ERROR` | Generic / unclassified error. |
+| `2` | `NO_RESULTS` | Ran fine but found nothing (empty result set). |
+| `3` | `NOT_FOUND` | Requested resource does not exist upstream (e.g. unknown CVE). |
+| `4` | `INVALID_INPUT` | Caller input was malformed (bad CVE ID, unsafe path, bad `--fail-on`). |
+| `5` | `UPSTREAM_ERROR` | An upstream data source failed (network, rate limit, 5xx, offline cache miss). |
+| `6` | `POLICY_FAIL` | A `bulk --fail-on` policy condition matched (the CI gate tripped). |
+
+These values are a public contract: existing codes are never renumbered.
+
+## Caching & Offline Mode
+
+PocMap keeps a **persistent, TTL'd HTTP response cache** on disk (default `./.cache`).
+This turns network-bound calls into sub-second cached ones, dodges GitHub/NVD rate
+limits, and backs a real offline mode. Non-200 and error responses are never cached.
+
+```bash
+# Warm the cache with a normal (online) run, then work entirely offline
+pocmap lookup CVE-2021-44228
+pocmap --offline lookup CVE-2021-44228     # served from cache, zero network I/O
+
+# Inspect / clear the cache
+pocmap cache info                          # location, entry count, on-disk size
+pocmap cache clear                         # delete every cached entry
+```
+
+In `--offline` mode (or with `POCMAP_OFFLINE=1`) HTTP GETs are served only from the
+cache; a cache miss surfaces a clear offline error and exits `5` (`UPSTREAM_ERROR`)
+rather than masquerading as "not found" or "no results".
+
+**Cache / offline configuration:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POCMAP_CACHE_ENABLED` | `true` | Enable/disable the persistent HTTP cache. |
+| `POCMAP_CACHE_DIR` | `./.cache` | Directory for cached responses. |
+| `POCMAP_CACHE_TTL` | `3600` | Seconds a cached entry stays fresh. |
+| `POCMAP_CACHE_MAX_MB` | `200` | On-disk cache cap (MB) before LRU eviction. |
+| `POCMAP_OFFLINE` | `false` | Serve only from cache; a miss errors instead of hitting the network. |
+
+## Diagnostics: `doctor` & `cache`
+
+`pocmap doctor` is the fastest path from "installed" to "working". It checks the Python
+version, the optional `[server]` extra, the *format* of your `GITHUB_API_TOKEN` /
+`NVD_API_KEY` (never printing their values), that the cache directory is writable, and
+runs a live connectivity probe against NVD and the GitHub API. It prints a PASS/WARN/FAIL
+table and **exits nonzero if any check FAILs**.
+
+```bash
+pocmap doctor                  # full run with a live connectivity probe
+pocmap doctor --offline        # skip the network probe (labelled SKIPPED)
+pocmap doctor --format json    # machine-readable check results
+```
+
+`pocmap cache info|clear` reports and clears the response cache (see above).
+
+## PocMap in CI
+
+`bulk` is a composable CI gate. Point it at a CVE list (a file, or `-` to read stdin),
+choose a machine format, and use `--fail-on` to fail the build on a policy match:
+
+```bash
+# Fail the build (exit 6) if any dependency CVE is in the CISA KEV catalog,
+# and write a SARIF log for GitHub code scanning.
+pocmap bulk cves.txt --format sarif --output out/ --fail-on kev
+
+# Pipe CVE IDs straight from another tool
+grep -oE 'CVE-[0-9]{4}-[0-9]+' sbom.txt | pocmap bulk - --format json --fail-on critical
+```
+
+`--fail-on` accepts `critical`, `high` (HIGH *or worse*), `kev`, or `epss>=N` (e.g.
+`epss>=50` on the 0-100 EPSS scale). A match exits `6` (`POLICY_FAIL`) — distinct from a
+generic error — so CI can tell a tripped gate apart from an operational failure; no match
+exits `0`. A malformed `--fail-on` exits `4`. In `table` mode `bulk` preserves its
+historical behaviour (writes a JSON **and** an HTML report to `--output`); the machine
+formats (`json`/`csv`/`sarif`) emit a clean stdout summary and write no files, so the
+stream stays parseable.
+
+See [`examples/ci-github-actions.yml`](examples/ci-github-actions.yml) for a ready-to-use
+GitHub Actions job that runs the gate and uploads the SARIF to code scanning, and the
+[`examples/`](examples/) directory for more runnable scripts.
 
 ## AI Agent Integration
 
@@ -657,6 +836,9 @@ POCMAP_MAX_RETRIES=3
 POCMAP_BACKOFF_FACTOR=1.5
 POCMAP_THREAD_POOL_SIZE=10
 POCMAP_LOG_LEVEL=INFO
+POCMAP_CACHE_ENABLED=true
+POCMAP_CACHE_TTL=3600
+POCMAP_CACHE_MAX_MB=200
 EOF
 ```
 
@@ -669,6 +851,14 @@ EOF
 | `POCMAP_BACKOFF_FACTOR` | 1.5 | Exponential backoff multiplier |
 | `POCMAP_THREAD_POOL_SIZE` | 10 | Worker thread count for bulk operations |
 | `POCMAP_LOG_LEVEL` | INFO | Logging verbosity (DEBUG, INFO, WARNING, ERROR) |
+| `POCMAP_CACHE_ENABLED` | true | Enable the persistent HTTP response cache |
+| `POCMAP_CACHE_DIR` | ./.cache | Directory for cached responses |
+| `POCMAP_CACHE_TTL` | 3600 | Seconds a cached entry stays fresh |
+| `POCMAP_CACHE_MAX_MB` | 200 | On-disk cache cap (MB) before LRU eviction |
+| `POCMAP_OFFLINE` | false | Serve HTTP only from cache; a miss errors instead of hitting the network |
+
+See [Caching & Offline Mode](#caching--offline-mode) and the [exit-code contract](#output-formats--exit-codes)
+for how these behave at runtime.
 
 ## Contributing
 

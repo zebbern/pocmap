@@ -1,0 +1,121 @@
+name: Release
+
+# Build, validate, and publish PocMap to PyPI.
+#
+# Triggers:
+#   - push of a tag matching  v*         -> build + validate + PUBLISH to PyPI
+#   - pull_request  /  workflow_dispatch -> build + validate ONLY (no publish),
+#     so packaging regressions are caught before a release tag is ever cut.
+#
+# The `build` job ALWAYS runs on every trigger (it is the dry-run / build-check
+# gate). The `publish` job is guarded so it only fires for real `v*` tag pushes.
+#
+# ---------------------------------------------------------------------------
+# ONE-TIME MANUAL SETUP  ([needs-user] — the maintainer must do this once,
+# before the first release tag). Publishing uses PyPI Trusted Publishing
+# (OIDC): there is NO API token or password stored in this repo.
+# ---------------------------------------------------------------------------
+#
+#  1. Have a PyPI account that will own the `pocmap` project
+#     (log in / register at https://pypi.org).
+#
+#  2. Register this repo + workflow as a Trusted Publisher on PyPI:
+#       - Brand-new project (name not yet on PyPI):
+#           https://pypi.org/manage/account/publishing/  ->  "Add a pending
+#           publisher".
+#       - Existing project: Project page -> Manage -> Publishing -> "Add a
+#           new publisher".
+#     Choose "GitHub Actions" and enter EXACTLY:
+#           PyPI Project Name:  pocmap
+#           Owner:              zebbern
+#           Repository name:    pocmap
+#           Workflow name:      release.yml
+#           Environment name:   pypi
+#     Save. (A pending publisher auto-creates the project on the first publish.)
+#
+#  3. Create the `pypi` GitHub environment in this repo:
+#       Repo Settings -> Environments -> "New environment" -> name it: pypi
+#     (Recommended: add a required reviewer so a human approves each publish,
+#      and restrict deployment to tag refs.) The environment name here MUST
+#      match the one registered on PyPI in step 2.
+#
+#  4. Cut a release:
+#       - Bump  __version__  in  src/pocmap/__init__.py , commit, then:
+#           git tag v2.0.1  &&  git push origin v2.0.1
+#       - The tag push runs this workflow and the `publish` job uploads to PyPI.
+#         Afterwards  `pip install pocmap`  /  `pipx install pocmap`  works.
+#
+# No repository secrets are needed. `permissions: id-token: write` plus the
+# `pypi` environment let GitHub mint a short-lived OIDC token that PyPI trusts.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & validate (sdist + wheel)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Check distribution metadata (twine)
+        run: python -m twine check dist/*
+
+      - name: Smoke-test the wheel (install + entry point)
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/python -m pip install --upgrade pip
+          /tmp/smoke/bin/python -m pip install dist/*.whl
+          /tmp/smoke/bin/pocmap --version
+
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI (Trusted Publishing / OIDC)
+    needs: build
+    # Only publish for real version tags pushed to the repo — never on pull
+    # requests or manual (workflow_dispatch) dry-runs.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pocmap/
+    permissions:
+      id-token: write # REQUIRED for OIDC Trusted Publishing (no stored token)
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        # Uses this repo's registered Trusted Publisher (see setup notes above).
+        # Reads dist/ by default; no username/password/API token required.
+        uses: pypa/gh-action-pypi-publish@release/v1

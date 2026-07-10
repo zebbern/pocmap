@@ -28,6 +28,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
+import click
 import typer
 from rich import print as rprint
 from rich.console import Console
@@ -90,7 +91,10 @@ app = typer.Typer(
     name="pocmap",
     help="A modern, AI-friendly tool to find PoCs related to CVE IDs",
     no_args_is_help=True,
-    add_completion=False,
+    # Shell completion (--install-completion / --show-completion) is table
+    # stakes for a CLI people live in; Typer generates bash/zsh/fish/PowerShell
+    # scripts for free.
+    add_completion=True,
 )
 
 
@@ -1038,26 +1042,35 @@ def cpe2cve(
 
 @app.command()
 def readme(
+    ctx: typer.Context,
     repo: Annotated[str, typer.Argument(help="GitHub repository URL")],
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Print the README directly, without paging"),
+    ] = False,
 ) -> None:
     """Display a GitHub repository's README file."""
     if not repo.startswith("https://github.com/"):
         rprint("[red3]Please provide a valid GitHub repository URL[/red3]")
         raise typer.Exit(1)
 
+    is_quiet = quiet or _state(ctx).quiet
+
     with ExploitService() as exploit_svc:
         content = exploit_svc.get_readme(repo)
 
-        if content:
-            import platform
-            import subprocess
+    if not content:
+        rprint("[red3]README.md not found[/red3]")
+        return
 
-            if platform.system() in ("Linux", "Darwin"):
-                subprocess.run(["less"], input=content, text=True)
-            else:
-                console.print(content)
-        else:
-            rprint("[red3]README.md not found[/red3]")
+    # Portable paging: click.echo_via_pager (Typer bundles click) works on every
+    # platform, Windows included, and degrades gracefully — when stdout is not a
+    # TTY (pipes, CI, tests) it falls back to a plain write instead of spawning a
+    # pager. --quiet takes that plain path directly so scripted output stays clean.
+    if is_quiet:
+        click.echo(content)
+    else:
+        click.echo_via_pager(content)
 
 
 @app.command()

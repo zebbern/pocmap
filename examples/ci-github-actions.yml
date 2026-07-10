@@ -1,0 +1,76 @@
+# -----------------------------------------------------------------------------
+# examples/ci-github-actions.yml
+#
+# Sample GitHub Actions job for a CONSUMER repository that uses PocMap as a CI
+# security gate. It:
+#   1. installs PocMap,
+#   2. runs `pocmap bulk` over a CVE list, emitting SARIF 2.1.0 to a file,
+#   3. uploads the SARIF to GitHub code scanning (Security tab), and
+#   4. fails the build when any CVE trips the `--fail-on kev` policy (exit 6).
+#
+# `pocmap bulk --format sarif` writes the SARIF log to STDOUT (the `--fail-on`
+# gate message goes to STDERR), so we redirect stdout to a file and capture the
+# exit code — that lets us upload the SARIF even when the gate trips.
+#
+# Copy this file to `.github/workflows/cve-scan.yml` in your repo and provide a
+# `cves.txt` with one CVE ID per line (blank lines and `#` comments are ignored).
+# -----------------------------------------------------------------------------
+name: CVE Scan (PocMap)
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 6 * * *" # daily at 06:00 UTC
+
+permissions:
+  contents: read
+  security-events: write # required to upload SARIF to code scanning
+
+jobs:
+  cve-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PocMap
+        # PocMap is not yet on PyPI — install from Git. Once published, this
+        # becomes `pip install pocmap`.
+        run: pip install "git+https://github.com/zebbern/pocmap.git"
+
+      - name: Scan CVEs -> SARIF (gate evaluated, job not failed yet)
+        id: scan
+        env:
+          # The built-in token raises the GitHub API rate limit for PoC lookups.
+          GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p out
+          set +e
+          pocmap bulk cves.txt --format sarif --fail-on kev > out/pocmap.sarif
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Upload SARIF to GitHub code scanning
+        if: always() # upload even when the gate trips, so findings are visible
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: out/pocmap.sarif
+          category: pocmap
+
+      - name: Enforce the policy gate
+        # Exit code 6 == ExitCode.POLICY_FAIL: a KEV CVE was present.
+        if: steps.scan.outputs.code == '6'
+        run: |
+          echo "::error::PocMap gate tripped — a CISA KEV CVE is present (exit 6)."
+          exit 1
+
+      - name: Fail on operational errors
+        # Anything other than 0 (OK) or 6 (policy) is a real failure to surface.
+        if: steps.scan.outputs.code != '0' && steps.scan.outputs.code != '6'
+        run: |
+          echo "::error::PocMap exited ${{ steps.scan.outputs.code }} (operational error)."
+          exit 1

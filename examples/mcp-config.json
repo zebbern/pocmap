@@ -1,0 +1,21 @@
+{
+  "_comment": "Claude Desktop / MCP client config for the PocMap MCP server (19 tools, 3 resources, 3 prompts). Merge the 'mcpServers' block into your client's config file. The '_comment'/'_instructions' keys are ignored by the client and exist only as documentation.",
+  "_instructions": [
+    "1. Install the server extra: pip install -e '.[server]' (provides the FastMCP SDK).",
+    "2. Replace the mcp_server.py path below with the ABSOLUTE path on your machine.",
+    "   Windows: use escaped backslashes, e.g. C:\\\\Users\\\\you\\\\pocmap\\\\mcp_server.py",
+    "3. Config file location — macOS: ~/Library/Application Support/Claude/claude_desktop_config.json ; Windows: %APPDATA%/Claude/claude_desktop_config.json",
+    "4. The 'env' tokens are optional but raise API rate limits; omit or leave blank to run unauthenticated.",
+    "5. Restart Claude Desktop after editing. The server speaks STDIO transport by default (what Claude Desktop expects)."
+  ],
+  "mcpServers": {
+    "pocmap": {
+      "command": "python",
+      "args": ["/absolute/path/to/pocmap/mcp_server.py"],
+      "env": {
+        "GITHUB_API_TOKEN": "ghp_xxxxxxxxxxxxxxxxxxxx",
+        "NVD_API_KEY": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      }
+    }
+  }
+}
