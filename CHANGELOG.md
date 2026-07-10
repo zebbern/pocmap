@@ -5,6 +5,31 @@ All notable changes to PocMap are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-07-10
+
+### Added
+- **Response caching** — persistent, TTL'd HTTP cache (`POCMAP_CACHE_ENABLED` / `POCMAP_CACHE_TTL` / `POCMAP_CACHE_MAX_MB`): far faster repeat calls and fewer upstream rate-limit hits.
+- **Machine-readable output everywhere** — global `--format {table,json,csv,md,sarif}` + `--quiet` on the read commands; **SARIF 2.1.0** on `latest`/`discover` for GitHub code scanning / CI pipelines.
+- **`bulk` as a CI gate** — read CVE ids from stdin (`bulk -`), machine `--format`, and `--fail-on {critical,high,kev,epss>=N}` which exits `POLICY_FAIL` (6) when any CVE matches.
+- **Snapshot diff** — `latest`/`discover --diff` (`--since-last`) reports what changed since the previous run (added/removed, KEV flips, severity/CVSS/EPSS moves, newly-available PoCs).
+- **Webhook notifications** — `latest`/`discover --notify <url>` posts a summary of notable CVEs (composes with `--diff`) through the SSRF-guarded sender.
+- **Offline mode** — global `--offline` / `POCMAP_OFFLINE`: serve only from cache and report a distinct offline error on a miss.
+- **Diagnostics** — `pocmap doctor` (Python/token/cache/connectivity checks) and `pocmap cache info|clear`.
+- **Stable exit-code contract** — 0 OK, 1 ERROR, 2 NO_RESULTS, 3 NOT_FOUND, 4 INVALID_INPUT, 5 UPSTREAM_ERROR, 6 POLICY_FAIL.
+- **Shell completion** (`--install-completion` / `--show-completion`).
+- **Pluggable exploit sources** — third-party packages register sources via the `pocmap.exploit_sources` entry-point group (`ExploitSourcePlugin`); a failing plugin is isolated to a `FetchStatus.ERROR`. See `examples/example-exploit-source/`.
+- **Source-status reporting** — per-source `FetchStatus` (OK/EMPTY/RATE_LIMITED/ERROR) so a throttled or down upstream is no longer indistinguishable from "no results".
+- **Release automation** — tag-triggered PyPI publish via Trusted Publishing (OIDC); a build + `twine check` gate on PRs. Runnable `examples/` and a refreshed README.
+
+### Fixed
+- **Dead MCP GitHub-PoC discovery** — the MCP adapter passed a `limit` argument `ExploitService.find_github_pocs` didn't accept, raising a swallowed `TypeError`; PoC discovery is restored across the MCP surface.
+- Our own programming errors (`TypeError`/`NameError`) are no longer swallowed into empty results.
+- `_url_domain` no longer echoes `user:token@` userinfo when logging webhook targets.
+- `readme` uses a portable pager (`click.echo_via_pager`) instead of shelling out to `less`.
+
+### Changed
+- `click` and (on 3.10) `typing_extensions` declared as direct dependencies; `jinja2` too. `mypy --strict` is now **blocking** in CI, which also runs the full offline pytest suite. Network-bound test scripts are marked and excluded by default.
+
 ## [2.0.0] - 2026-07-10
 
 ### Security
@@ -52,4 +77,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CVE/PoC/exploit-discovery toolkit: a Typer CLI, a FastMCP server exposing 19 tools,
   a synchronous Python API, and the bug-bounty toolkit (checklists, playbooks, scoring).
 
+[2.1.0]: https://github.com/zebbern/pocmap/releases/tag/v2.1.0
 [2.0.0]: https://github.com/zebbern/pocmap/releases/tag/v2.0.0

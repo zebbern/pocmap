@@ -898,6 +898,37 @@ class ExploitService:
 
 3. Add tests and documentation.
 
+### Third-Party Exploit Sources (plugins — no fork needed)
+
+External packages can add exploit sources **without modifying pocmap** by registering an
+entry point in the `pocmap.exploit_sources` group. A source is any object exposing
+`search(cve_id: str) -> list[Exploit]` (the `ExploitSourcePlugin` protocol):
+
+```toml
+# your package's pyproject.toml
+[project.entry-points."pocmap.exploit_sources"]
+my-source = "my_pkg.source:MySource"
+```
+
+```python
+# my_pkg/source.py
+from pocmap.models import Exploit, ExploitSource
+
+class MySource:
+    source = "my-source"
+
+    def search(self, cve_id: str) -> list[Exploit]:
+        return [Exploit(source=ExploitSource.OTHER, url="https://…", title="…")]
+```
+
+`pip install` your package and its results automatically appear in `pocmap lookup` and
+`ExploitService.find_exploits`. Plugins are **error-isolated**: a failing plugin degrades
+to a `FetchStatus.ERROR` (visible via `find_exploits_with_status`) without affecting the
+built-in sources. A complete runnable example is in
+[`examples/example-exploit-source/`](examples/example-exploit-source/). Note: entry-point
+plugins execute third-party code you chose to install — pocmap only calls their `search()`
+and aggregates the results with per-source status isolation.
+
 ### Development Setup
 
 ```bash

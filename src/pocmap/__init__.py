@@ -29,7 +29,7 @@ from pocmap.models import (
     ReportEntry,
 )
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __all__ = [
     "CVSSScore",
     "CVEInfo",
