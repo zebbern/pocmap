@@ -18,6 +18,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Annotated
@@ -42,6 +43,7 @@ from pocmap.services.lab_service import LabService
 from pocmap.services.product_service import ProductDiscoveryService
 from pocmap.services.recent_service import RecentService
 from pocmap.services.report_service import ReportService
+from pocmap.utils.exit_codes import ExitCode
 from pocmap.utils.formatters import (
     format_bb_table,
     format_cve_table,
@@ -49,6 +51,7 @@ from pocmap.utils.formatters import (
     format_recent_cves_table,
 )
 from pocmap.utils.http import NotFoundError, ValidationError
+from pocmap.utils.output import OutputFormat, render
 from pocmap.utils.paths import safe_path as _safe_path
 
 # Configure logging
@@ -81,16 +84,101 @@ def _banner() -> None:
     )
 
 
+@dataclass
+class CLIState:
+    """Global CLI state threaded through the Typer callback via ``ctx.obj``.
+
+    Attributes:
+        output_format: The selected output format (``table`` by default).
+        quiet: Whether to suppress the banner and decorative output.
+    """
+
+    output_format: OutputFormat = OutputFormat.TABLE
+    quiet: bool = False
+
+
+def _state(ctx: typer.Context) -> CLIState:
+    """Return the :class:`CLIState` stored on the context (or a default)."""
+    obj = ctx.obj
+    if isinstance(obj, CLIState):
+        return obj
+    return CLIState()
+
+
+def _emit_json_error(exc: Exception, *, category: str) -> None:
+    """Emit a compact JSON error object to stdout (json output mode)."""
+    render(
+        {
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+            "category": category,
+        },
+        OutputFormat.JSON,
+        console=console,
+    )
+
+
+def _lookup_json(cve: str, *, language: str | None, limit: int) -> None:
+    """JSON view-model path for ``lookup`` — no banner, no spinners, JSON only.
+
+    Wires exit codes: invalid CVE id -> INVALID_INPUT (4); not-found ->
+    NOT_FOUND (3); success -> 0.
+    """
+    with CVEService() as service, ExploitService() as exploit_svc, LabService() as lab_svc:
+        try:
+            cve_info = service.get_cve_info(cve)
+        except ValidationError as exc:
+            _emit_json_error(exc, category="invalid_input")
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
+        except NotFoundError as exc:
+            _emit_json_error(exc, category="not_found")
+            raise typer.Exit(ExitCode.NOT_FOUND) from exc
+
+        github_pocs = exploit_svc.find_github_pocs(cve)
+        if language:
+            github_pocs = exploit_svc.filter_by_language(github_pocs, language)
+        db_exploits = exploit_svc.find_db_exploits(cve)
+        labs = lab_svc.find_labs(cve)
+
+    view = {
+        "cve": cve_info.model_dump(mode="json"),
+        "github_pocs": [ex.model_dump(mode="json") for ex in github_pocs[:limit]],
+        "db_exploits": [ex.model_dump(mode="json") for ex in db_exploits],
+        "labs": [lab.model_dump(mode="json") for lab in labs],
+    }
+    render(view, OutputFormat.JSON, console=console)
+
+
 @app.command()
 def lookup(
+    ctx: typer.Context,
     cve: Annotated[str, typer.Argument(help="CVE ID (e.g., CVE-2021-44228)")],
     description: Annotated[bool, typer.Option("--description", "-d", help="Show CVE description")] = False,
     language: Annotated[str | None, typer.Option("--language", "-l", help="Filter PoCs by programming language")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum number of PoCs to display", min=1)] = 10,
     no_banner: Annotated[bool, typer.Option("--no-banner", help="Suppress banner")] = False,
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Output format: table (default) or json"),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress banner and decorative output"),
+    ] = False,
 ) -> None:
     """Look up a single CVE and display its information along with discovered PoCs."""
-    if not no_banner:
+    state = _state(ctx)
+    # A locally-passed --format/--quiet overrides the global (callback) value;
+    # otherwise fall back to whatever the global callback recorded on ctx.obj.
+    fmt = output_format if output_format is not None else state.output_format
+    is_quiet = quiet or state.quiet
+
+    # JSON output: machine-readable view model to stdout, no banner/spinners.
+    if fmt is OutputFormat.JSON:
+        _lookup_json(cve, language=language, limit=limit)
+        return
+
+    if not no_banner and not is_quiet:
         _banner()
 
     with CVEService() as service, ExploitService() as exploit_svc, LabService() as lab_svc:
@@ -102,9 +190,12 @@ def lookup(
             ) as progress:
                 progress.add_task("[bright_blue]Fetching CVE info...[/bright_blue]", total=None)
                 cve_info = service.get_cve_info(cve)
-        except (ValidationError, NotFoundError) as exc:
+        except ValidationError as exc:
             rprint(f"[red3]Error: {exc}[/red3]")
-            raise typer.Exit(1) from exc
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
+        except NotFoundError as exc:
+            rprint(f"[red3]Error: {exc}[/red3]")
+            raise typer.Exit(ExitCode.NOT_FOUND) from exc
 
         # Display CVE info
         rprint(format_cve_table(cve_info))
@@ -633,12 +724,21 @@ def discover(
 def main(
     ctx: typer.Context,
     version: Annotated[bool, typer.Option("--version", "-v", help="Show version")] = False,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format for supported commands (table, json)"),
+    ] = OutputFormat.TABLE,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress banner and decorative output"),
+    ] = False,
 ) -> None:
     """PocMap: AI-friendly CVE PoC discovery tool."""
+    ctx.obj = CLIState(output_format=output_format, quiet=quiet)
     if version:
         rprint(f"pocmap v{__version__}")
         raise typer.Exit(0)
-    if ctx.invoked_subcommand is None:
+    if ctx.invoked_subcommand is None and not quiet:
         _banner()
         rprint("\n[bold]Usage:[/bold] pocmap [COMMAND] [ARGS]")
         rprint("Run [bold]pocmap --help[/bold] for available commands.")

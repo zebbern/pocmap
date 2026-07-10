@@ -19,6 +19,7 @@ Example::
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import socket
 import threading
@@ -30,6 +31,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from pocmap.config import settings
+from pocmap.utils.cache import HTTPCache
 
 BLOCKED_HOSTS = {
     "localhost",
@@ -394,9 +396,15 @@ class HTTPClient:
         params: dict[str, Any] | None = None,
         default: Any = None,
         timeout: int | None = None,
+        no_cache: bool = False,
         **kwargs: Any,
     ) -> Any:
         """Send a GET request and parse the response as JSON.
+
+        When the persistent cache is enabled, a fresh cached ``200`` body for the
+        same ``(method, url, params)`` is returned **without any network call**;
+        the SSRF-validated :meth:`get` path runs only on a cache miss/expiry, and
+        only ``200`` responses are written back.
 
         Args:
             url: Target URL.
@@ -404,19 +412,35 @@ class HTTPClient:
             params: URL query parameters.
             default: Value to return if the response is not valid JSON.
             timeout: Per-request timeout override (falls back to instance default).
+            no_cache: When ``True``, bypass the cache entirely (no read, no write).
             **kwargs: Additional arguments passed to ``requests.get``.
 
         Returns:
             Parsed JSON data, or *default* if parsing fails.
         """
+        cache = _get_cache()
+        cache_key: str | None = None
+        if cache.enabled and not no_cache:
+            cache_key = HTTPCache.make_key("GET", url, params)
+            cached_body = cache.get(cache_key)
+            if cached_body is not None:
+                try:
+                    return json.loads(cached_body)
+                except (ValueError, TypeError):
+                    logger.warning("Discarding corrupt cached JSON for %s", url)
+                    # fall through to a live fetch
+
         resp = self.get(url, headers=headers, params=params, timeout=timeout, **kwargs)
         if resp.status_code == 404:
             return default
         try:
-            return resp.json()
+            data = resp.json()
         except (ValueError, TypeError):
             logger.warning("Failed to parse JSON from %s", url)
             return default
+        if cache_key is not None and resp.status_code == 200:
+            cache.set(cache_key, resp.text, status=resp.status_code)
+        return data
 
     def get_text(
         self,
@@ -425,9 +449,15 @@ class HTTPClient:
         params: dict[str, Any] | None = None,
         default: str = "",
         timeout: int | None = None,
+        no_cache: bool = False,
         **kwargs: Any,
     ) -> str:
         """Send a GET request and return the response body as text.
+
+        When the persistent cache is enabled, a fresh cached ``200`` body for the
+        same ``(method, url, params)`` is returned **without any network call**;
+        the SSRF-validated :meth:`get` path runs only on a cache miss/expiry, and
+        only ``200`` responses are written back.
 
         Args:
             url: Target URL.
@@ -435,15 +465,27 @@ class HTTPClient:
             params: URL query parameters.
             default: Value to return on failure.
             timeout: Per-request timeout override (falls back to instance default).
+            no_cache: When ``True``, bypass the cache entirely (no read, no write).
             **kwargs: Additional arguments.
 
         Returns:
             Response body text, or *default* on failure.
         """
+        cache = _get_cache()
+        cache_key: str | None = None
+        if cache.enabled and not no_cache:
+            cache_key = HTTPCache.make_key("GET", url, params)
+            cached_body = cache.get(cache_key)
+            if cached_body is not None:
+                return cached_body
+
         resp = self.get(url, headers=headers, params=params, timeout=timeout, **kwargs)
         if resp.status_code == 404:
             return default
-        return resp.text
+        text = resp.text
+        if cache_key is not None and resp.status_code == 200:
+            cache.set(cache_key, text, status=resp.status_code)
+        return text
 
     def close(self) -> None:
         """Close the underlying session and release connections."""
@@ -463,6 +505,7 @@ class HTTPClient:
 # ---------------------------------------------------------------------------
 
 _client: HTTPClient | None = None
+_cache: HTTPCache | None = None
 
 
 def _get_default_client() -> HTTPClient:
@@ -471,6 +514,18 @@ def _get_default_client() -> HTTPClient:
     if _client is None:
         _client = HTTPClient()
     return _client
+
+
+def _get_cache() -> HTTPCache:
+    """Return the lazily-initialized shared HTTP response cache.
+
+    Built once from :data:`pocmap.config.settings`. Tests may replace the module
+    global ``_cache`` to inject a temp-dir-backed cache.
+    """
+    global _cache
+    if _cache is None:
+        _cache = HTTPCache.from_settings()
+    return _cache
 
 
 def fetch_json(

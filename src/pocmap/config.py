@@ -30,6 +30,10 @@ DEFAULT_MAX_RETRIES: Final[int] = 3
 DEFAULT_BACKOFF_FACTOR: Final[float] = 1.5
 DEFAULT_THREAD_POOL_SIZE: Final[int] = 10
 
+# Persistent HTTP response cache (see utils/cache.py).
+DEFAULT_CACHE_TTL: Final[int] = 3600  # seconds an entry stays fresh
+DEFAULT_CACHE_MAX_MB: Final[int] = 200  # total on-disk cap before LRU eviction
+
 # API endpoint URLs
 NVD_API_BASE: Final[str] = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 CVE_ORG_GIT_RAW: Final[str] = (
@@ -109,6 +113,9 @@ class Settings:
         thread_pool_size: Default worker count for thread pools.
         user_agents_file: Path to the user agents list file.
         cache_dir: Directory for cached data.
+        cache_enabled: Whether the persistent HTTP response cache is active.
+        cache_ttl: Seconds a cached HTTP response stays fresh.
+        cache_max_mb: Total on-disk cache cap in MB before LRU eviction.
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR).
     """
 
@@ -120,6 +127,9 @@ class Settings:
     thread_pool_size: int = DEFAULT_THREAD_POOL_SIZE
     user_agents_file: Path = USER_AGENTS_FILE
     cache_dir: Path = field(default_factory=lambda: PROJECT_ROOT / ".cache")
+    cache_enabled: bool = True
+    cache_ttl: int = DEFAULT_CACHE_TTL
+    cache_max_mb: int = DEFAULT_CACHE_MAX_MB
     log_level: str = "INFO"
 
     @property
@@ -193,6 +203,13 @@ def _build_settings() -> Settings:
         except (ValueError, TypeError):
             return default
 
+    def _safe_bool(env_var: str, default: bool) -> bool:
+        """Parse an environment variable as a boolean with fallback."""
+        raw = os.getenv(env_var)
+        if raw is None:
+            return default
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+
     return Settings(
         github_api_token=os.getenv(f"{prefix}GITHUB_API_TOKEN")
         or os.getenv("GITHUB_API_TOKEN"),
@@ -209,6 +226,9 @@ def _build_settings() -> Settings:
             os.getenv(f"{prefix}USER_AGENTS_FILE", str(USER_AGENTS_FILE))
         ),
         cache_dir=Path(os.getenv(f"{prefix}CACHE_DIR", str(PROJECT_ROOT / ".cache"))),
+        cache_enabled=_safe_bool(f"{prefix}CACHE_ENABLED", True),
+        cache_ttl=_safe_int(f"{prefix}CACHE_TTL", DEFAULT_CACHE_TTL),
+        cache_max_mb=_safe_int(f"{prefix}CACHE_MAX_MB", DEFAULT_CACHE_MAX_MB),
         log_level=os.getenv(f"{prefix}LOG_LEVEL", "INFO"),
     )
 
