@@ -40,6 +40,7 @@ from rich.progress import (
 from rich.table import Table
 
 from pocmap import __version__
+from pocmap.bugbounty.automation import _post_webhook, _url_domain
 from pocmap.config import (
     GITHUB_API_BASE,
     NVD_API_BASE,
@@ -57,6 +58,7 @@ from pocmap.services.product_service import ProductDiscoveryService
 from pocmap.services.recent_service import RecentService
 from pocmap.services.report_service import ReportService
 from pocmap.services.snapshot import (
+    ChangeReason,
     SnapshotDiff,
     SnapshotRecord,
     diff_snapshots,
@@ -72,7 +74,13 @@ from pocmap.utils.formatters import (
     format_exploit_table,
     format_recent_cves_table,
 )
-from pocmap.utils.http import HTTPClient, NotFoundError, OfflineError, ValidationError
+from pocmap.utils.http import (
+    HTTPClient,
+    HTTPError,
+    NotFoundError,
+    OfflineError,
+    ValidationError,
+)
 from pocmap.utils.output import OutputFormat, render
 from pocmap.utils.paths import safe_path as _safe_path
 
@@ -473,6 +481,154 @@ def _compute_diff(
     save_snapshot(key, persisted)
     current = load_snapshot(key) or []
     return diff_snapshots(previous, current)
+
+
+# ---------------------------------------------------------------------------
+# NOTIFY — post a compact webhook summary of notable CVEs (latest / discover)
+# ---------------------------------------------------------------------------
+
+# Canonical, token-free NVD detail page put in each webhook item's ``url``.
+_NVD_DETAIL_URL = "https://nvd.nist.gov/vuln/detail/"
+
+# Cap the inline CVE list carried in a webhook payload; ``count`` still reflects
+# the true total. Keeps a busy day from posting a giant blob to Slack/Discord.
+_NOTIFY_MAX_ITEMS = 20
+
+# Among the *changed* CVEs in a --diff delta, only these movements are worth
+# pushing to a responder: newly-exploited (KEV gained) or a severity escalation.
+# (Every *added* CVE is notable regardless.)
+_NOTABLE_DIFF_REASONS = frozenset(
+    {ChangeReason.KEV_GAINED, ChangeReason.SEVERITY_ESCALATED}
+)
+
+
+def _notify_item_from_cve(cve: CVEInfo) -> dict[str, object]:
+    """Compact webhook item (id, severity, epss, kev, url) from a CVEInfo."""
+    cvss = cve.cvss
+    return {
+        "id": cve.id,
+        "severity": cvss.severity.value if cvss is not None else "UNKNOWN",
+        "epss": cve.epss,
+        "kev": bool(cve.kev_status),
+        "url": f"{_NVD_DETAIL_URL}{cve.id}",
+    }
+
+
+def _notify_item_from_record(record: SnapshotRecord) -> dict[str, object]:
+    """Compact webhook item from a snapshot record (the --diff delta path)."""
+    return {
+        "id": record.cve_id,
+        "severity": record.severity or "UNKNOWN",
+        "epss": record.epss,
+        "kev": bool(record.kev_status),
+        "url": f"{_NVD_DETAIL_URL}{record.cve_id}",
+    }
+
+
+def _notable_cve_items(cves: Iterable[CVEInfo]) -> list[dict[str, object]]:
+    """Select the critical/high-or-KEV CVEs from a result set as webhook items."""
+    items: list[dict[str, object]] = []
+    for cve in cves:
+        severity = cve.cvss.severity.value if cve.cvss is not None else None
+        if severity in ("CRITICAL", "HIGH") or cve.kev_status:
+            items.append(_notify_item_from_cve(cve))
+    return items
+
+
+def _notable_diff_items(diff: SnapshotDiff) -> list[dict[str, object]]:
+    """Select the added + KEV-gained/severity-escalated CVEs from a --diff delta."""
+    records = list(diff.added)
+    records.extend(
+        change.current
+        for change in diff.changed
+        if any(reason in _NOTABLE_DIFF_REASONS for reason in change.reasons)
+    )
+    return [_notify_item_from_record(record) for record in records]
+
+
+def _notify_text(label: str, items: list[dict[str, object]]) -> str:
+    """A short, human-readable summary line (renders nicely in Slack/Discord)."""
+    head = ", ".join(str(item["id"]) for item in items[:5])
+    more = "" if len(items) <= 5 else f", +{len(items) - 5} more"
+    return f"{len(items)} notable CVE(s) — {label}: {head}{more}"
+
+
+def _build_notify_payload(
+    *,
+    source: str,
+    label: str,
+    query: dict[str, object],
+    items: list[dict[str, object]],
+) -> dict[str, object]:
+    """Assemble the compact JSON webhook payload for *items*.
+
+    Shape: ``title``, ``text`` (human line), ``source`` (``latest``/``discover``),
+    ``generated_at``, the ``query`` that produced it, ``count`` (true total),
+    ``kev_count``, and a capped ``cves`` list of ``{id, severity, epss, kev,
+    url}``. Carries no secrets — the only URLs are public NVD detail links.
+    """
+    total = len(items)
+    return {
+        "title": f"PocMap: {total} notable CVE(s) — {label}",
+        "text": _notify_text(label, items),
+        "source": source,
+        "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
+        "query": query,
+        "count": total,
+        "kev_count": sum(1 for item in items if item.get("kev")),
+        "cves": items[:_NOTIFY_MAX_ITEMS],
+    }
+
+
+def _run_notify(
+    notify: str | None,
+    *,
+    source: str,
+    label: str,
+    query: dict[str, object],
+    items: list[dict[str, object]],
+    is_quiet: bool,
+) -> None:
+    """POST a compact CVE summary to *notify* via the SSRF-guarded webhook sender.
+
+    A no-op when ``--notify`` is absent. With **zero** notable CVEs the POST is
+    skipped (documented behaviour) rather than pinging the webhook with an empty
+    summary. Otherwise the payload is sent through
+    :func:`pocmap.bugbounty.automation._post_webhook` — the single guarded choke
+    point (``is_safe_url`` + ``HTTPClient.post_json`` →
+    ``resolves_to_internal_ip`` + no-redirect) — so an internal/unsafe webhook is
+    rejected by the guard and never actually reached.
+
+    Only the target **domain** is ever printed (via :func:`_url_domain`); a token
+    embedded in the webhook URL never lands in a log line. A guard rejection
+    (``ValueError``), transport/internal-IP failure (``HTTPError``) or offline
+    cache-miss (``OfflineError``) prints a clean stderr error and exits
+    :attr:`ExitCode.UPSTREAM_ERROR` (5). Every confirmation goes to **stderr** so
+    a machine-readable stdout stream stays byte-for-byte unchanged.
+    """
+    if not notify:
+        return
+    domain = _url_domain(notify)
+    if not items:
+        if not is_quiet:
+            err_console.print(
+                f"[dim]Notify: no notable CVEs for {label}; skipping {domain}.[/dim]"
+            )
+        return
+    payload = _build_notify_payload(source=source, label=label, query=query, items=items)
+    try:
+        _post_webhook(notify, payload)
+    except (ValueError, OfflineError, HTTPError) as exc:
+        # Domain-only: never echo the full URL (it may embed a webhook token).
+        err_console.print(
+            f"[red3]Notify failed: could not POST to {domain} "
+            f"({type(exc).__name__})[/red3]"
+        )
+        raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
+    if not is_quiet:
+        err_console.print(
+            f"[green1]Notified {domain} ({payload['count']} CVE(s))[/green1]"
+        )
 
 
 def _lookup_json(cve: str, *, language: str | None, limit: int) -> None:
@@ -1105,6 +1261,14 @@ def latest(
             help="Show only what changed since the last identical run (added/removed/changed)",
         ),
     ] = False,
+    notify: Annotated[
+        str | None,
+        typer.Option(
+            "--notify",
+            help="POST a summary of notable CVEs to a webhook URL (Slack/Discord/generic); "
+            "with --diff, only the delta is sent",
+        ),
+    ] = None,
     output_format: Annotated[
         OutputFormat | None,
         typer.Option("--format", "-f", help="Output format: table (default), json, csv, md, sarif"),
@@ -1192,6 +1356,11 @@ def latest(
             render({"total": 0, "cves": []}, fmt, console=console)
         else:  # csv / md / sarif -> a well-formed empty document
             render([], fmt, console=console)
+        # Zero results is zero notable CVEs: --notify is a documented skip (a
+        # short stderr note when not quiet), never an empty webhook ping.
+        _run_notify(
+            notify, source="latest", label="Recent CVEs", query={}, items=[], is_quiet=is_quiet
+        )
         raise typer.Exit(ExitCode.NO_RESULTS)
 
     # Build the structured view model once (shared by JSON stdout + --output file).
@@ -1211,19 +1380,20 @@ def latest(
         }
         for r in results
     ]
+    query_meta: dict[str, object] = {
+        "since": since,
+        "from_date": str(parsed_from) if parsed_from else None,
+        "to_date": str(parsed_to) if parsed_to else None,
+        "severity": severity_list,
+        "kev_only": kev_only,
+        "min_epss": min_epss,
+        "only_with_poc": only_with_poc,
+        "sort": sort,
+        "limit": limit,
+    }
     report_data: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
-        "query": {
-            "since": since,
-            "from_date": str(parsed_from) if parsed_from else None,
-            "to_date": str(parsed_to) if parsed_to else None,
-            "severity": severity_list,
-            "kev_only": kev_only,
-            "min_epss": min_epss,
-            "only_with_poc": only_with_poc,
-            "sort": sort,
-            "limit": limit,
-        },
+        "query": query_meta,
         "total": len(results),
         "cves": cve_rows,
     }
@@ -1248,9 +1418,18 @@ def latest(
     # --diff: render only the delta vs. the previous identical run, then persist
     # the current result set as the new baseline. Respects --format.
     if diff:
-        delta = _compute_diff("latest", report_data["query"], results)
+        delta = _compute_diff("latest", query_meta, results)
         _render_diff(delta, fmt, label="Recent CVEs")
         _write_report_file()
+        # Notify on the delta only: added + KEV-gained/severity-escalated.
+        _run_notify(
+            notify,
+            source="latest",
+            label="Recent CVEs",
+            query=query_meta,
+            items=_notable_diff_items(delta),
+            is_quiet=is_quiet,
+        )
         raise typer.Exit(ExitCode.OK)
 
     # STDOUT rendering by format (the default table path is byte-for-byte as before).
@@ -1282,6 +1461,16 @@ def latest(
     # Save to file if requested (unchanged JSON content; --format governs stdout).
     _write_report_file()
 
+    # Notify (side effect; stdout above is untouched): critical/high + KEV CVEs.
+    _run_notify(
+        notify,
+        source="latest",
+        label="Recent CVEs",
+        query=query_meta,
+        items=_notable_cve_items(r.cve_info for r in results),
+        is_quiet=is_quiet,
+    )
+
 
 @app.command()
 def discover(
@@ -1299,6 +1488,14 @@ def discover(
             help="Show only what changed since the last identical run (added/removed/changed)",
         ),
     ] = False,
+    notify: Annotated[
+        str | None,
+        typer.Option(
+            "--notify",
+            help="POST a summary of notable CVEs to a webhook URL (Slack/Discord/generic); "
+            "with --diff, only the delta is sent",
+        ),
+    ] = None,
     output_format: Annotated[
         OutputFormat | None,
         typer.Option("--format", "-f", help="Output format: table (default), json, csv, md, sarif"),
@@ -1358,6 +1555,16 @@ def discover(
         result.confirmed_affected or result.possibly_affected or result.not_enough_data
     )
 
+    # Shared across every terminal path: the flat CVE list and the query dict
+    # that identify this run (also the snapshot key for --diff and --notify).
+    disc_all_cves = [cve for _tier, cves in tiers for cve in cves]
+    disc_query: dict[str, object] = {
+        "product": product,
+        "version": version,
+        "vendor": vendor,
+        "limit": limit,
+    }
+
     # Structured report (shared by JSON stdout + --output file; content unchanged).
     report_data: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
@@ -1390,14 +1597,17 @@ def discover(
     # --diff: render only the delta vs. the previous identical run, then persist
     # the current result set (all tiers) as the new baseline. Respects --format.
     if diff:
-        all_cves = [cve for _tier, cves in tiers for cve in cves]
-        delta = _compute_diff(
-            "discover",
-            {"product": product, "version": version, "vendor": vendor, "limit": limit},
-            all_cves,
-        )
+        delta = _compute_diff("discover", disc_query, disc_all_cves)
         _render_diff(delta, fmt, label=f"Product Discovery: {result.query}")
         _write_output_file()
+        _run_notify(
+            notify,
+            source="discover",
+            label=f"Product Discovery: {result.query}",
+            query=disc_query,
+            items=_notable_diff_items(delta),
+            is_quiet=is_quiet,
+        )
         raise typer.Exit(ExitCode.OK)
 
     # Machine-readable formats: emit the view model, save the file, set exit code.
@@ -1417,6 +1627,14 @@ def discover(
             ]
             render(rows, fmt, console=console, title=f"Product Discovery: {result.query}")
         _write_output_file()
+        _run_notify(
+            notify,
+            source="discover",
+            label=f"Product Discovery: {result.query}",
+            query=disc_query,
+            items=_notable_cve_items(disc_all_cves),
+            is_quiet=is_quiet,
+        )
         raise typer.Exit(ExitCode.NO_RESULTS if is_empty else ExitCode.OK)
 
     # Default table rendering (byte-for-byte as before).
@@ -1454,6 +1672,15 @@ def discover(
         rprint(f"\n[dim]Not Enough Data ({len(result.not_enough_data)})[/dim]")
 
     _write_output_file()
+    # Notify (side effect; stdout above is untouched): critical/high + KEV CVEs.
+    _run_notify(
+        notify,
+        source="discover",
+        label=f"Product Discovery: {result.query}",
+        query=disc_query,
+        items=_notable_cve_items(disc_all_cves),
+        is_quiet=is_quiet,
+    )
     if is_empty:
         raise typer.Exit(ExitCode.NO_RESULTS)
 
