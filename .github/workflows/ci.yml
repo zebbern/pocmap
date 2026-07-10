@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    name: Lint, type-check, offline tests
+    name: Lint, type-check, tests
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -16,10 +16,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -32,12 +32,14 @@ jobs:
       - name: Lint (ruff)
         run: ruff check src
 
-      # mypy --strict currently has known findings; advisory only for now.
-      - name: Type check (mypy, advisory)
+      - name: Type check (mypy --strict)
         run: mypy src
-        continue-on-error: true
 
-      # Offline suite only. The network tests (test_e2e.py,
-      # test_new_features_edge.py) make live API calls and are NOT run in CI.
-      - name: Offline test suite
+      - name: Offline pytest suite
+        # `addopts = -m 'not network'` in pyproject keeps this offline: it runs
+        # the native regression tests (SSRF, EPSS scale, HTML report) and skips
+        # the live-network suites (test_e2e.py, test_new_features_edge.py).
+        run: python -m pytest -q
+
+      - name: Offline characterization suite
         run: python tests/test_edge_cases.py
