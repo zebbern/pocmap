@@ -254,21 +254,23 @@ def test_bulk_sarif_is_valid_2_1_0(monkeypatch: pytest.MonkeyPatch) -> None:
     assert by_id["CVE-2021-44228"]["properties"]["kev"] is True
 
 
-def test_bulk_table_default_writes_reports(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bulk_table_default_writes_reports(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """The default (table) format keeps the historical JSON+HTML file output."""
     monkeypatch.setattr(
         ReportService,
         "generate_bulk_report",
         lambda self, ids: _multi([_entry(_cve("CVE-2021-44228"))]),
     )
-    # ``--output`` is validated against the CWD by safe_path, so run inside an
-    # isolated filesystem and write to a relative subdirectory.
-    with runner.isolated_filesystem():
-        result = runner.invoke(
-            app, ["bulk", "-", "--output", "reports"], input="CVE-2021-44228\n"
-        )
-        assert result.exit_code == ExitCode.OK, result.stdout
-        written = list(Path("reports").iterdir())
+    # ``--output`` is validated against the CWD by safe_path, so run inside a
+    # temp dir (portable across click versions) and write to a relative subdir.
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(
+        app, ["bulk", "-", "--output", "reports"], input="CVE-2021-44228\n"
+    )
+    assert result.exit_code == ExitCode.OK, result.stdout
+    written = list((tmp_path / "reports").iterdir())
     assert any(p.suffix == ".json" for p in written)
     assert any(p.suffix == ".html" for p in written)
 
