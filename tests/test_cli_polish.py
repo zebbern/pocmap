@@ -16,6 +16,7 @@ monkeypatched and ``subprocess.run`` is stubbed with an assert-not-called spy.
 
 from __future__ import annotations
 
+import re
 import subprocess
 
 import pytest
@@ -25,6 +26,24 @@ from pocmap.cli import app
 from pocmap.services.exploit_service import ExploitService
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _help_text(*argv: str) -> str:
+    """Render help WIDE and ANSI-stripped.
+
+    Rich renders Typer's help into a bordered panel whose width defaults to
+    ~80 cols on a non-TTY (CI). At that width it wraps long option names like
+    ``--install-completion`` across lines, so a naive substring check fails on
+    CI while passing on a wide local terminal. Forcing ``COLUMNS`` wide + no
+    color makes the assertions deterministic.
+    """
+    result = runner.invoke(
+        app, list(argv), env={"COLUMNS": "400", "NO_COLOR": "1", "TERM": "dumb"}
+    )
+    assert result.exit_code == 0, result.output
+    return _ANSI_RE.sub("", result.output)
 
 # Every command that must appear in ``pocmap --help`` (11 @app.command() plus the
 # ``cache`` sub-Typer) — the roadmap's "12 commands" contract.
@@ -62,10 +81,9 @@ def test_show_completion_emits_script(argv: list[str]) -> None:
 
 def test_install_completion_option_exists() -> None:
     """Enabling completion exposes ``--install-completion`` on the root help."""
-    result = runner.invoke(app, ["--help"])
-    assert result.exit_code == 0
-    assert "--install-completion" in result.output
-    assert "--show-completion" in result.output
+    text = _help_text("--help")
+    assert "--install-completion" in text
+    assert "--show-completion" in text
 
 
 # ---------------------------------------------------------------------------
@@ -74,18 +92,16 @@ def test_install_completion_option_exists() -> None:
 
 
 def test_help_lists_all_twelve_commands() -> None:
-    result = runner.invoke(app, ["--help"])
-    assert result.exit_code == 0, result.output
+    text = _help_text("--help")
     for command in EXPECTED_COMMANDS:
-        assert command in result.output, f"missing command in --help: {command}"
+        assert command in text, f"missing command in --help: {command}"
 
 
 def test_global_callback_options_intact() -> None:
     """The global ``--format`` / ``--quiet`` / ``--offline`` options survive."""
-    result = runner.invoke(app, ["--help"])
-    assert result.exit_code == 0
+    text = _help_text("--help")
     for option in ("--format", "--quiet", "--offline"):
-        assert option in result.output, f"missing global option: {option}"
+        assert option in text, f"missing global option: {option}"
 
 
 # ---------------------------------------------------------------------------
