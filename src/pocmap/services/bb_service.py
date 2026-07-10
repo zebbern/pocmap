@@ -27,7 +27,7 @@ from pocmap.config import (
     settings,
 )
 from pocmap.models import BugBountyReport, BugBountySource
-from pocmap.utils.http import HTTPClient, fetch_json, fetch_text
+from pocmap.utils.http import HTTPClient, fetch_json, fetch_text, is_programming_error
 from pocmap.utils.validators import validate_cve_id
 
 logger = logging.getLogger(__name__)
@@ -125,6 +125,8 @@ class BugBountyService:
                         )
                     )
         except Exception as exc:
+            if is_programming_error(exc):
+                raise
             logger.debug("HackerOne search failed for %s: %s", cve_id, exc)
 
         return matches
@@ -155,6 +157,8 @@ class BugBountyService:
                             title=title,
                         )
         except Exception as exc:
+            if is_programming_error(exc):
+                raise
             logger.debug("PentesterLand search failed for %s: %s", cve_id, exc)
 
         return None
@@ -177,6 +181,8 @@ class BugBountyService:
                     has_poc=None,
                 )
         except Exception as exc:
+            if is_programming_error(exc):
+                raise
             logger.debug("BugBountyHunting search failed for %s: %s", cve_id, exc)
 
         return None

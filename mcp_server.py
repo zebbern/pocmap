@@ -56,6 +56,7 @@ from pocmap.services.exploit_service import ExploitService  # noqa: E402
 from pocmap.services.lab_service import LabService  # noqa: E402
 from pocmap.services.product_service import ProductDiscoveryService  # noqa: E402
 from pocmap.services.recent_service import RecentService  # noqa: E402
+from pocmap.utils.http import is_programming_error  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -103,6 +104,8 @@ class ServiceAdapter:
             info = self._cve.get_cve_info(cve_id)
             return self._normalize_cve_info(info)
         except Exception as e:
+            if is_programming_error(e):
+                raise
             logger.warning(f"CVE lookup failed for {cve_id}: {e}")
             return {"error": f"CVE lookup failed ({type(e).__name__})", "cve_id": cve_id}
 
@@ -113,7 +116,9 @@ class ServiceAdapter:
             epss = info.epss
             # CVEInfo.epss is on a 0-100 scale; normalize to a 0-1 probability.
             return epss / 100.0 if epss is not None else None
-        except Exception:
+        except Exception as e:
+            if is_programming_error(e):
+                raise
             return None
 
     def check_kev(self, cve_id: str) -> bool:
@@ -121,7 +126,9 @@ class ServiceAdapter:
         try:
             info = self._cve.get_cve_info(cve_id)
             return bool(info.kev_status)
-        except Exception:
+        except Exception as e:
+            if is_programming_error(e):
+                raise
             return False
 
     # -- Exploit Service --
@@ -132,8 +139,26 @@ class ServiceAdapter:
             exploits = self._exploit.find_github_pocs(cve_id, limit=limit)
             return [self._normalize_exploit(e) for e in exploits[:limit]]
         except Exception as e:
+            if is_programming_error(e):
+                raise
             logger.warning(f"GitHub PoC search failed: {e}")
             return []
+
+    def find_github_pocs_with_sources(
+        self, cve_id: str, limit: int = 10
+    ) -> dict[str, Any]:
+        """Find GitHub PoCs and report per-source health (ERR-RESULT).
+
+        Returns ``{"pocs": [...], "sources": [...]}`` where ``sources`` records
+        whether GitHub was ``ok``/``empty``/``rate_limited``/``error`` — so a
+        throttled or down GitHub can never masquerade as "no PoCs found".
+        Programming bugs propagate (they are not masked as empty).
+        """
+        result = self._exploit.find_github_pocs_with_status(cve_id, limit=limit)
+        return {
+            "pocs": [self._normalize_exploit(e) for e in result.exploits],
+            "sources": [s.to_dict() for s in result.sources],
+        }
 
     def find_metasploit_module(self, cve_id: str, limit: int = 1) -> dict[str, Any] | None:
         """Find Metasploit module."""
@@ -144,6 +169,8 @@ class ServiceAdapter:
                     return self._normalize_exploit(e)
             return None
         except Exception as e:
+            if is_programming_error(e):
+                raise
             logger.warning(f"Metasploit search failed: {e}")
             return None
 
@@ -156,6 +183,8 @@ class ServiceAdapter:
                     return self._normalize_exploit(e)
             return None
         except Exception as e:
+            if is_programming_error(e):
+                raise
             logger.warning(f"ExploitDB search failed: {e}")
             return None
 
@@ -168,6 +197,8 @@ class ServiceAdapter:
                     return self._normalize_exploit(e)
             return None
         except Exception as e:
+            if is_programming_error(e):
+                raise
             logger.warning(f"Nuclei search failed: {e}")
             return None
 
@@ -179,6 +210,8 @@ class ServiceAdapter:
             reports = self._bb.find_reports(cve_id)
             return [self._normalize_bb_report(r) for r in reports]
         except Exception as e:
+            if is_programming_error(e):
+                raise
             logger.warning(f"Bug bounty search failed: {e}")
             return []
 
@@ -190,6 +223,8 @@ class ServiceAdapter:
             labs = self._lab.find_labs(cve_id)
             return [self._normalize_lab(lab) for lab in labs]
         except Exception as e:
+            if is_programming_error(e):
+                raise
             logger.warning(f"Lab search failed: {e}")
             return []
 
@@ -201,7 +236,9 @@ class ServiceAdapter:
                 if lab.platform == LabPlatform.VULHUB:
                     return lab.url
             return None
-        except Exception:
+        except Exception as e:
+            if is_programming_error(e):
+                raise
             return None
 
     # -- CPE Service --
@@ -212,6 +249,8 @@ class ServiceAdapter:
             cpes = self._cve.get_cpes(cve_id)
             return [self._normalize_cpe(c) for c in cpes]
         except Exception as e:
+            if is_programming_error(e):
+                raise
             logger.warning(f"CPE lookup failed: {e}")
             return []
 
@@ -220,6 +259,8 @@ class ServiceAdapter:
         try:
             return self._cve.cpe_to_cves(cpe)
         except Exception as e:
+            if is_programming_error(e):
+                raise
             logger.warning(f"CPE->CVE lookup failed: {e}")
             return []
 
@@ -286,6 +327,8 @@ class ServiceAdapter:
                 "cves": [self._normalize_recent_result(r) for r in results],
             }
         except Exception as e:
+            if is_programming_error(e):
+                raise
             logger.warning(f"Recent exploit discovery failed: {e}")
             return {"success": False, "error": f"Recent exploit discovery failed ({type(e).__name__})"}
 
@@ -528,6 +571,8 @@ class ServiceAdapter:
             )
             return self._normalize_discovery_result(result)
         except Exception as e:
+            if is_programming_error(e):
+                raise
             logger.warning(f"Product discovery failed: {e}")
             return {"error": f"Product discovery failed ({type(e).__name__})", "product": product}
 
@@ -986,17 +1031,21 @@ def find_github_pocs(cve_id: str, limit: int = 10) -> str:
         limit: Maximum number of results (1-50, default: 10)
 
     Returns:
-        JSON string with cve_id, total_count, and a list of PoC objects
-        (source, url, title, language, stars, forks).
+        JSON string with cve_id, total_count, a list of PoC objects
+        (source, url, title, language, stars, forks), and a ``sources`` block
+        reporting per-source health (status ``ok``/``empty``/``rate_limited``/
+        ``error``, plus category/retryable) so a throttled or down GitHub is
+        never reported as "no PoCs found".
     """
     try:
         limit = max(1, min(50, limit))
-        exploits = _svc.find_github_pocs(cve_id, limit)
+        data = _svc.find_github_pocs_with_sources(cve_id, limit)
         cve_clean = cve_id.upper().strip()
         return _ok({
             "cve_id": cve_clean,
-            "total_count": len(exploits),
-            "pocs": exploits,
+            "total_count": len(data["pocs"]),
+            "pocs": data["pocs"],
+            "sources": data["sources"],
         })
     except Exception as e:
         return _tool_error(e, f"find_github_pocs({cve_id})")

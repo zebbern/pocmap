@@ -19,7 +19,7 @@ from pocmap.config import (
     SHODAN_CVEDB_URL,
     settings,
 )
-from pocmap.utils.http import HTTPClient, HTTPError, fetch_json, fetch_text
+from pocmap.utils.http import HTTPClient, HTTPError, fetch_json, fetch_text, is_programming_error
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +229,8 @@ class CVEOrgClient:
             if text:
                 self._epss_cache = list(csv.DictReader(text.splitlines()))
         except Exception as exc:
+            if is_programming_error(exc):
+                raise
             logger.warning("Failed to load EPSS cache: %s", exc)
             self._epss_cache = []
 
@@ -336,8 +338,10 @@ class CVEOrgClient:
                             ghsa_links.append("https://github.com" + str(link["href"]))
                 if ghsa_links:
                     refs["GHSA"] = "\n".join(ghsa_links)
-        except Exception:
-            pass
+        except Exception as exc:
+            if is_programming_error(exc):
+                raise
+            logger.debug("GHSA reference lookup failed for %s: %s", cve_id, exc)
 
         # KEV references
         if kev_record:

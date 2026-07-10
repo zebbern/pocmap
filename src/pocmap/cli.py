@@ -17,7 +17,10 @@ Usage::
 
 from __future__ import annotations
 
+import importlib.util
 import logging
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -34,7 +37,13 @@ from rich.progress import (
 from rich.table import Table
 
 from pocmap import __version__
-from pocmap.config import settings
+from pocmap.config import (
+    GITHUB_API_BASE,
+    NVD_API_BASE,
+    github_token_looks_valid,
+    nvd_api_key_looks_valid,
+    settings,
+)
 from pocmap.models import export_schemas
 from pocmap.services.bb_service import BugBountyService
 from pocmap.services.cve_service import CVEService
@@ -43,6 +52,7 @@ from pocmap.services.lab_service import LabService
 from pocmap.services.product_service import ProductDiscoveryService
 from pocmap.services.recent_service import RecentService
 from pocmap.services.report_service import ReportService
+from pocmap.utils.cache import HTTPCache
 from pocmap.utils.exit_codes import ExitCode
 from pocmap.utils.formatters import (
     format_bb_table,
@@ -50,7 +60,7 @@ from pocmap.utils.formatters import (
     format_exploit_table,
     format_recent_cves_table,
 )
-from pocmap.utils.http import NotFoundError, ValidationError
+from pocmap.utils.http import HTTPClient, NotFoundError, ValidationError
 from pocmap.utils.output import OutputFormat, render
 from pocmap.utils.paths import safe_path as _safe_path
 
@@ -718,6 +728,385 @@ def discover(
         }
         output_path.write_text(_json.dumps(report_data, indent=2, default=str), encoding="utf-8")
         rprint(f"\n[green1]Report saved to {output_path}[/green1]")
+
+
+# ---------------------------------------------------------------------------
+# doctor / cache — self-diagnostics and cache management
+# ---------------------------------------------------------------------------
+
+# Rich colour per check status.
+_STATUS_STYLE = {
+    "PASS": "green1",
+    "WARN": "yellow",
+    "FAIL": "red3",
+    "SKIPPED": "dim",
+}
+
+
+@dataclass
+class CheckResult:
+    """A single ``pocmap doctor`` result row.
+
+    Attributes:
+        name: Human-readable name of the check.
+        status: One of ``PASS`` / ``WARN`` / ``FAIL`` / ``SKIPPED``.
+        detail: A short, secret-free explanation. Never contains a token value.
+        category: Coarse bucket used to pick the process exit code
+            (e.g. ``connectivity`` failures map to ``UPSTREAM_ERROR``).
+    """
+
+    name: str
+    status: str
+    detail: str
+    category: str = "general"
+
+
+# A prober returns ``(endpoint-name, reachable?, short-detail)`` per upstream.
+UpstreamProber = Callable[[], list[tuple[str, bool, str]]]
+
+# Minimum supported interpreter (kept as data so the runtime check below is a
+# genuine comparison rather than a statically-constant ``sys.version_info`` one).
+_MIN_PYTHON = (3, 10)
+
+
+def _human_size(num_bytes: int) -> str:
+    """Return *num_bytes* as a compact human-readable string (B/KB/MB/GB)."""
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB"):
+        if size < 1024.0:
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} GB"
+
+
+def _probe_upstreams() -> list[tuple[str, bool, str]]:
+    """Live connectivity probe of key upstreams — **[needs-user/network]**.
+
+    Performs a real GET against a couple of upstream endpoints (NVD, GitHub)
+    and reports whether each is reachable. This is the only network I/O in the
+    ``doctor`` command; the offline test suite injects a fake prober in its
+    place. Reachability means "a response came back" (any HTTP status), so a
+    4xx still counts the host as up. Never raises.
+    """
+    targets = [("NVD", NVD_API_BASE), ("GitHub API", GITHUB_API_BASE)]
+    results: list[tuple[str, bool, str]] = []
+    with HTTPClient(timeout=10) as client:
+        for name, url in targets:
+            try:
+                resp = client.get(url)
+                results.append((name, True, f"HTTP {resp.status_code}"))
+            except Exception as exc:
+                results.append((name, False, type(exc).__name__))
+    return results
+
+
+def _check_python() -> CheckResult:
+    """Check the running interpreter is Python 3.10+."""
+    version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    current = (sys.version_info.major, sys.version_info.minor)
+    if current >= _MIN_PYTHON:
+        return CheckResult("Python version", "PASS", f"{version} (>= 3.10)", "python")
+    return CheckResult("Python version", "FAIL", f"{version} (< 3.10 required)", "python")
+
+
+def _check_mcp_extra() -> CheckResult:
+    """Check the optional FastMCP SDK (the ``[server]`` extra) is importable."""
+    if importlib.util.find_spec("mcp") is not None:
+        return CheckResult("MCP server extra", "PASS", "FastMCP SDK importable", "extras")
+    return CheckResult(
+        "MCP server extra",
+        "WARN",
+        "MCP server needs pip install -e '.[server]'",
+        "extras",
+    )
+
+
+def _check_github_token() -> CheckResult:
+    """Check the GitHub token: absent -> WARN, present+malformed -> FAIL.
+
+    The token value itself is never included in the result detail.
+    """
+    token = settings.github_api_token
+    if not token:
+        return CheckResult(
+            "GitHub API token",
+            "WARN",
+            "not set (optional; raises GitHub rate limits)",
+            "token",
+        )
+    if github_token_looks_valid(token):
+        return CheckResult("GitHub API token", "PASS", "set and well-formed", "token")
+    return CheckResult(
+        "GitHub API token",
+        "FAIL",
+        "set but malformed (expected ghp_/github_pat_/... prefix)",
+        "token",
+    )
+
+
+def _check_nvd_key() -> CheckResult:
+    """Check the NVD API key: absent -> WARN, present+malformed -> FAIL."""
+    key = settings.nvd_api_key
+    if not key:
+        return CheckResult(
+            "NVD API key",
+            "WARN",
+            "not set (optional; raises NVD rate limits)",
+            "token",
+        )
+    if nvd_api_key_looks_valid(key):
+        return CheckResult("NVD API key", "PASS", "set and well-formed", "token")
+    return CheckResult(
+        "NVD API key",
+        "FAIL",
+        "set but malformed (expected UUID 8-4-4-4-12)",
+        "token",
+    )
+
+
+def _dir_writable(path: Path) -> bool:
+    """Return ``True`` if a probe file can be created and removed under *path*."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".pocmap-doctor-write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _check_cache() -> CheckResult:
+    """Check the cache directory is writable and report its current size."""
+    cache_dir = settings.cache_dir
+    info = HTTPCache.from_settings().info()
+    size = _human_size(info["bytes"])
+    if _dir_writable(cache_dir):
+        return CheckResult(
+            "Cache directory",
+            "PASS",
+            f"{cache_dir} writable ({info['entries']} entries, {size})",
+            "cache",
+        )
+    return CheckResult(
+        "Cache directory",
+        "WARN",
+        f"{cache_dir} not writable ({info['entries']} entries, {size})",
+        "cache",
+    )
+
+
+def _check_connectivity(offline: bool, prober: UpstreamProber) -> list[CheckResult]:
+    """Run (or skip) the injected upstream connectivity probe."""
+    if offline:
+        return [
+            CheckResult(
+                "Upstream connectivity",
+                "SKIPPED",
+                "offline mode - live probe skipped",
+                "connectivity",
+            )
+        ]
+    return [
+        CheckResult(
+            f"Connectivity: {name}",
+            "PASS" if ok else "FAIL",
+            detail if ok else f"unreachable ({detail})",
+            "connectivity",
+        )
+        for name, ok, detail in prober()
+    ]
+
+
+def _gather_doctor_checks(*, offline: bool, prober: UpstreamProber) -> list[CheckResult]:
+    """Run every diagnostic and return the ordered result list.
+
+    Everything except the injected *prober* is fully offline; the prober is the
+    only component that performs network I/O (and is skipped when *offline*).
+    """
+    checks = [
+        _check_python(),
+        _check_mcp_extra(),
+        _check_github_token(),
+        _check_nvd_key(),
+        _check_cache(),
+    ]
+    checks.extend(_check_connectivity(offline, prober))
+    return checks
+
+
+def _doctor_exit_code(checks: list[CheckResult]) -> ExitCode:
+    """Pick the exit code: OK if no FAIL, else UPSTREAM_ERROR / ERROR."""
+    fails = [c for c in checks if c.status == "FAIL"]
+    if not fails:
+        return ExitCode.OK
+    if all(c.category == "connectivity" for c in fails):
+        return ExitCode.UPSTREAM_ERROR
+    return ExitCode.ERROR
+
+
+@app.command()
+def doctor(
+    ctx: typer.Context,
+    offline: Annotated[
+        bool,
+        typer.Option("--offline", help="Skip the live upstream connectivity probe"),
+    ] = False,
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Output format: table (default) or json"),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress banner and decorative output"),
+    ] = False,
+) -> None:
+    """Run self-diagnostics: Python, extras, tokens, cache, and connectivity.
+
+    Emits a PASS/WARN/FAIL table (or JSON with ``--format json``) and exits
+    nonzero if any check FAILs. The live connectivity probe is skipped under
+    ``--offline`` and labelled SKIPPED.
+    """
+    state = _state(ctx)
+    fmt = output_format if output_format is not None else state.output_format
+    is_quiet = quiet or state.quiet
+
+    checks = _gather_doctor_checks(offline=offline, prober=_probe_upstreams)
+    exit_code = _doctor_exit_code(checks)
+    summary = {
+        "pass": sum(1 for c in checks if c.status == "PASS"),
+        "warn": sum(1 for c in checks if c.status == "WARN"),
+        "fail": sum(1 for c in checks if c.status == "FAIL"),
+        "skipped": sum(1 for c in checks if c.status == "SKIPPED"),
+    }
+
+    if fmt is OutputFormat.JSON:
+        render(
+            {
+                "ok": exit_code == ExitCode.OK,
+                "summary": summary,
+                "checks": [
+                    {
+                        "name": c.name,
+                        "status": c.status,
+                        "detail": c.detail,
+                        "category": c.category,
+                    }
+                    for c in checks
+                ],
+            },
+            OutputFormat.JSON,
+            console=console,
+        )
+        raise typer.Exit(exit_code)
+
+    if not is_quiet:
+        _banner()
+
+    table = Table(show_lines=False, header_style="bold", title="PocMap Doctor")
+    table.add_column("Check")
+    table.add_column("Status", justify="center")
+    table.add_column("Detail", overflow="fold")
+    for c in checks:
+        style = _STATUS_STYLE.get(c.status, "white")
+        table.add_row(c.name, f"[{style}]{c.status}[/{style}]", c.detail)
+    console.print(table)
+
+    if not is_quiet:
+        rprint(
+            f"\n[dim]Summary: {summary['pass']} PASS | {summary['warn']} WARN | "
+            f"{summary['fail']} FAIL | {summary['skipped']} SKIPPED[/dim]"
+        )
+    raise typer.Exit(exit_code)
+
+
+cache_app = typer.Typer(
+    name="cache",
+    help="Inspect and manage the persistent HTTP response cache.",
+    no_args_is_help=True,
+)
+app.add_typer(cache_app, name="cache")
+
+
+@cache_app.command("info")
+def cache_info(
+    ctx: typer.Context,
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Output format: table (default) or json"),
+    ] = None,
+) -> None:
+    """Show the cache location, entry count, and on-disk size."""
+    state = _state(ctx)
+    fmt = output_format if output_format is not None else state.output_format
+    cache = HTTPCache.from_settings()
+    info = cache.info()
+
+    if fmt is OutputFormat.JSON:
+        render(
+            {
+                "cache_dir": str(settings.cache_dir),
+                "enabled": settings.cache_enabled,
+                "entries": info["entries"],
+                "bytes": info["bytes"],
+                "human_size": _human_size(info["bytes"]),
+            },
+            OutputFormat.JSON,
+            console=console,
+        )
+        return
+
+    table = Table(show_lines=False, header_style="bold", title="HTTP Response Cache")
+    table.add_column("Field")
+    table.add_column("Value", overflow="fold")
+    table.add_row("Location", str(settings.cache_dir))
+    table.add_row("Enabled", str(settings.cache_enabled))
+    table.add_row("Entries", str(info["entries"]))
+    table.add_row("Size", _human_size(info["bytes"]))
+    console.print(table)
+
+
+@cache_app.command("clear")
+def cache_clear(
+    ctx: typer.Context,
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Output format: table (default) or json"),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress decorative output"),
+    ] = False,
+) -> None:
+    """Delete every entry from the persistent HTTP response cache."""
+    state = _state(ctx)
+    fmt = output_format if output_format is not None else state.output_format
+    is_quiet = quiet or state.quiet
+    cache = HTTPCache.from_settings()
+    before = cache.info()
+    cache.clear()
+    after = cache.info()
+    removed = before["entries"] - after["entries"]
+    freed = before["bytes"] - after["bytes"]
+
+    if fmt is OutputFormat.JSON:
+        render(
+            {
+                "cleared_entries": removed,
+                "remaining_entries": after["entries"],
+                "freed_bytes": freed,
+            },
+            OutputFormat.JSON,
+            console=console,
+        )
+        return
+
+    if not is_quiet:
+        plural = "y" if removed == 1 else "ies"
+        rprint(
+            f"[green1]Cleared {removed} cache entr{plural} "
+            f"({_human_size(freed)} freed)[/green1]"
+        )
 
 
 @app.callback(invoke_without_command=True)

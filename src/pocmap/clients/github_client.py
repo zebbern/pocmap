@@ -17,7 +17,7 @@ from pocmap.config import (
     settings,
 )
 from pocmap.models import Exploit, ExploitSource
-from pocmap.utils.http import HTTPClient, HTTPError
+from pocmap.utils.http import HTTPClient, HTTPError, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,10 @@ class GitHubClient:
                         exploits.append(ex)
                 exploits.sort(key=lambda x: (x.stars or 0, x.forks or 0), reverse=True)
                 return exploits
+        except RateLimitError:
+            # Propagate throttling so the aggregator reports RATE_LIMITED rather
+            # than treating a rate-limited GitHub as "no PoCs found".
+            raise
         except HTTPError:
             logger.debug("Nomi-sec lookup failed for %s", cve_id)
 
@@ -88,6 +92,8 @@ class GitHubClient:
                 exploits = self._parse_trickest_md(text)
                 exploits.sort(key=lambda x: (x.stars or 0, x.forks or 0), reverse=True)
                 return exploits
+        except RateLimitError:
+            raise
         except HTTPError:
             logger.debug("TrickestCVE lookup failed for %s", cve_id)
 

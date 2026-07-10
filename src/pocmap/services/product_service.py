@@ -27,7 +27,7 @@ from pocmap.models import (
     ProductDiscoveryResult,
     VersionConstraint,
 )
-from pocmap.utils.http import HTTPClient, HTTPError
+from pocmap.utils.http import HTTPClient, HTTPError, is_programming_error
 
 logger = logging.getLogger(__name__)
 
@@ -649,6 +649,8 @@ class ProductDiscoveryService:
                 affected_cpes=affected_cpes,
             )
         except Exception as exc:
+            if is_programming_error(exc):
+                raise
             logger.debug("Failed to parse NVD CVE data: %s", exc)
             return None
 

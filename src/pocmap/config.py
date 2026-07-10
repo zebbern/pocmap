@@ -14,6 +14,7 @@ Example::
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -235,3 +236,41 @@ def _build_settings() -> Settings:
 
 # Global singleton -- imported by other modules
 settings: Settings = _build_settings()
+
+
+# ---------------------------------------------------------------------------
+# Credential format validation (offline shape checks used by `pocmap doctor`)
+# ---------------------------------------------------------------------------
+
+# Modern prefixed GitHub tokens: ghp_ (classic PAT), gho_ (OAuth), ghu_
+# (user-to-server), ghs_ (server-to-server), ghr_ (refresh) + >=36 body chars.
+_GITHUB_PREFIXED_RE: Final = re.compile(r"^gh[posru]_[A-Za-z0-9]{36,255}$")
+# Fine-grained personal access tokens.
+_GITHUB_PAT_RE: Final = re.compile(r"^github_pat_[A-Za-z0-9_]{22,255}$")
+# Legacy (pre-2021) 40-char hex OAuth tokens.
+_GITHUB_LEGACY_RE: Final = re.compile(r"^[0-9a-fA-F]{40}$")
+# NVD API keys are UUID-style 8-4-4-4-12 hex strings.
+_NVD_KEY_RE: Final = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def github_token_looks_valid(token: str) -> bool:
+    """Return ``True`` if *token* has a plausible GitHub token shape.
+
+    Recognizes modern prefixed tokens (``ghp_``/``gho_``/``ghu_``/``ghs_``/
+    ``ghr_``), fine-grained PATs (``github_pat_``), and legacy 40-char hex OAuth
+    tokens. This is a cheap, offline *shape* check only — it never contacts
+    GitHub and the token value is never logged or echoed by callers.
+    """
+    candidate = token.strip()
+    return bool(
+        _GITHUB_PREFIXED_RE.match(candidate)
+        or _GITHUB_PAT_RE.match(candidate)
+        or _GITHUB_LEGACY_RE.match(candidate)
+    )
+
+
+def nvd_api_key_looks_valid(key: str) -> bool:
+    """Return ``True`` if *key* looks like an NVD API key (UUID 8-4-4-4-12 hex)."""
+    return bool(_NVD_KEY_RE.match(key.strip()))

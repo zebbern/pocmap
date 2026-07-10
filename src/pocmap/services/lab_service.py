@@ -22,7 +22,7 @@ from bs4 import BeautifulSoup
 
 from pocmap.config import HTB_TAGS_URL, THM_ROOMS_URL, VULHUB_TOML_URL, settings
 from pocmap.models import LabEnvironment, LabPlatform
-from pocmap.utils.http import HTTPClient, fetch_text
+from pocmap.utils.http import HTTPClient, fetch_text, is_programming_error
 from pocmap.utils.registry import PluginRegistry
 from pocmap.utils.validators import validate_cve_id
 
@@ -118,6 +118,8 @@ class LabService:
                         setup_instructions=instructions,
                     )
         except Exception as exc:
+            if is_programming_error(exc):
+                raise
             logger.warning("Vulhub search failed for %s: %s", cve_id, exc)
 
         return None
@@ -155,6 +157,8 @@ class LabService:
                     url=f"https://www.hackthebox.com/machines/{machine_name.lower()}",
                 )
         except Exception as exc:
+            if is_programming_error(exc):
+                raise
             logger.debug("HackTheBox search failed for %s: %s", cve_id, exc)
 
         return None
@@ -188,6 +192,8 @@ class LabService:
                             url=url_part.strip(),
                         )
         except Exception as exc:
+            if is_programming_error(exc):
+                raise
             logger.debug("TryHackMe search failed for %s: %s", cve_id, exc)
 
         return None

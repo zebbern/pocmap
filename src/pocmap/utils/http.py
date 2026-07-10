@@ -24,7 +24,10 @@ import logging
 import socket
 import threading
 import urllib.parse
-from typing import Any, Literal
+from collections.abc import Callable
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Literal, TypeVar
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -201,6 +204,19 @@ class HTTPError(PocMapError):
         self.url = url
 
 
+class RateLimitError(HTTPError):
+    """Raised when an upstream signals rate limiting.
+
+    A distinct :class:`HTTPError` subclass so callers can tell a *throttled*
+    source (HTTP 429, or GitHub's HTTP 403 with ``X-RateLimit-Remaining: 0``)
+    apart from a generic failure or a genuine empty result. Because it still
+    subclasses :class:`HTTPError`, every existing ``except HTTPError`` handler
+    keeps catching it — the distinction is purely additive.
+    """
+
+    pass
+
+
 class ValidationError(PocMapError):
     """Raised when input validation fails."""
 
@@ -211,6 +227,145 @@ class NotFoundError(PocMapError):
     """Raised when a requested resource is not found."""
 
     pass
+
+
+# ---------------------------------------------------------------------------
+# Per-source reliability status (ERR-RESULT)
+#
+# Lets an aggregating service report *why* a source contributed no rows so a
+# down/throttled upstream can never masquerade as "nothing found" — a
+# trust-critical distinction for a security tool.
+# ---------------------------------------------------------------------------
+
+
+class FetchStatus(str, Enum):
+    """Outcome of querying a single upstream source."""
+
+    OK = "ok"  # source responded and returned >= 1 result
+    EMPTY = "empty"  # source responded successfully with 0 results
+    RATE_LIMITED = "rate_limited"  # source throttled us (HTTP 429 / 403 rl)
+    ERROR = "error"  # source failed (network / HTTP / parse error)
+
+
+# Exceptions that indicate a bug in *our own* code rather than an upstream
+# problem. These must never be silently degraded into an "empty" result:
+# swallowing one is exactly what hid the FIX-GHPOC ``TypeError`` (an adapter
+# calling a service method with the wrong signature) for so long. They are
+# re-raised by :func:`collect_source` so they surface in tests/CI.
+#
+# Deliberately conservative: ``KeyError``/``AttributeError``/``IndexError`` are
+# routinely raised while parsing volatile external HTML/CSV/JSON and must still
+# degrade gracefully, so they are NOT treated as programming errors here.
+_PROGRAMMING_ERRORS: tuple[type[BaseException], ...] = (
+    TypeError,
+    NameError,
+    UnboundLocalError,
+)
+
+
+def is_programming_error(exc: BaseException) -> bool:
+    """Return True if *exc* is a programming bug that must not be swallowed."""
+    return isinstance(exc, _PROGRAMMING_ERRORS)
+
+
+def categorize_exception(exc: BaseException) -> tuple[str, bool]:
+    """Map *exc* to the MCP ``(category, retryable)`` taxonomy.
+
+    Mirrors ``mcp_server._format_error_json`` so the CLI, service, and MCP
+    layers describe a failed source with the same vocabulary.
+    """
+    if isinstance(exc, RateLimitError):
+        return "rate_limited", True
+    if isinstance(exc, PermissionError):
+        return "permission_error", False
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError, HTTPError)):
+        return "network_error", True
+    if isinstance(exc, ValueError):
+        return "invalid_input", False
+    return "unknown", False
+
+
+def _is_rate_limited(resp: requests.Response) -> bool:
+    """Detect an upstream rate-limit signal on a completed response.
+
+    True for HTTP 429, or HTTP 403 with GitHub's ``X-RateLimit-Remaining: 0``
+    header. urllib3's ``Retry`` already retries 429 (and 5xx); this only
+    classifies what remains *after* retries so a throttled source is
+    distinguishable from a generic failure or an empty result.
+    """
+    if resp.status_code == 429:
+        return True
+    if resp.status_code == 403:
+        remaining = resp.headers.get("X-RateLimit-Remaining")
+        if remaining is not None and remaining.strip() == "0":
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class SourceStatus:
+    """Health record for a single source, produced while aggregating a lookup.
+
+    Serializes (via :meth:`to_dict`) into the ``sources`` block of MCP/JSON
+    output using the same ``category``/``retryable`` taxonomy as the MCP error
+    envelope.
+    """
+
+    name: str
+    status: FetchStatus
+    count: int = 0
+    category: str = "ok"
+    retryable: bool = False
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "source": self.name,
+            "status": self.status.value,
+            "count": self.count,
+            "retryable": self.retryable,
+        }
+        if self.category and self.category != "ok":
+            payload["category"] = self.category
+        if self.detail:
+            payload["detail"] = self.detail
+        return payload
+
+
+_T = TypeVar("_T")
+
+
+def collect_source(name: str, fn: Callable[[], list[_T]]) -> tuple[list[_T], SourceStatus]:
+    """Run source callable *fn*, classifying its outcome into a :class:`SourceStatus`.
+
+    - A programming bug (``TypeError``/``NameError``/``UnboundLocalError``) is
+      **re-raised**, never masked as empty — the FIX-GHPOC-class regression guard.
+    - :class:`RateLimitError` -> ``RATE_LIMITED``; any other operational failure
+      (HTTP/network) -> ``ERROR``; both degrade gracefully (return ``[]``).
+    - A successful call yields ``OK`` (non-empty) or ``EMPTY`` (zero rows).
+    """
+    try:
+        results = fn()
+    except Exception as exc:  # noqa: BLE001 - deliberately broad; re-raises bugs
+        if is_programming_error(exc):
+            raise
+        category, retryable = categorize_exception(exc)
+        status = (
+            FetchStatus.RATE_LIMITED
+            if isinstance(exc, RateLimitError)
+            else FetchStatus.ERROR
+        )
+        logger.warning("source %s degraded (%s): %s", name, status.value, type(exc).__name__)
+        return [], SourceStatus(
+            name=name,
+            status=status,
+            category=category,
+            retryable=retryable,
+            detail=type(exc).__name__,
+        )
+    result_list = list(results)
+    outcome = FetchStatus.OK if result_list else FetchStatus.EMPTY
+    return result_list, SourceStatus(name=name, status=outcome, count=len(result_list))
 
 
 class HTTPClient:
@@ -383,6 +538,15 @@ class HTTPClient:
                         current_params = None  # query is carried in the target
                         continue
                     logger.debug("GET %s -> %d", current_url, resp.status_code)
+                    # Distinguish throttling from a generic failure so callers
+                    # can report RATE_LIMITED instead of masking it as "empty".
+                    # urllib3 already retried 429/5xx before we get here.
+                    if _is_rate_limited(resp):
+                        raise RateLimitError(
+                            f"Rate limited by upstream (HTTP {resp.status_code})",
+                            status_code=resp.status_code,
+                            url=current_url,
+                        )
                     return resp
             raise HTTPError(f"Too many redirects (> {_MAX_REDIRECTS}): {url}", url=url)
         except requests.RequestException as exc:
