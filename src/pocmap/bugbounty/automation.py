@@ -49,11 +49,21 @@ logger = logging.getLogger(__name__)
 
 
 def _url_domain(url: str) -> str:
-    """Extract domain from URL for safe logging (excludes tokens, paths, query params)."""
+    """Extract host[:port] from URL for safe logging.
+
+    Uses ``hostname`` (not ``netloc``) so any ``user:token@`` userinfo — a
+    common place to smuggle a secret into a URL — is never echoed into a log
+    line or exception message. Path/query/fragment are also excluded.
+    """
     try:
         from urllib.parse import urlparse
         parsed = urlparse(url)
-        return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else parsed.netloc
+        host = parsed.hostname or ""
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        if not host:
+            return "[invalid url]"
+        return f"{parsed.scheme}://{host}" if parsed.scheme else host
     except Exception:
         return "[invalid url]"
 
