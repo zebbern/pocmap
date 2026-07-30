@@ -1,6 +1,6 @@
 # PocMap
 
-[![Version](https://img.shields.io/badge/version-2.4.2-blue.svg)](https://github.com/zebbern/pocmap)
+[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)](https://github.com/zebbern/pocmap)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2-purple.svg)](https://docs.pydantic.dev/)
@@ -11,9 +11,9 @@ AI-agent-optimized CVE exploit discovery toolkit for bug bounty hunters and secu
 
 - **Multi-Source Discovery**: Queries GitHub, Exploit-DB, Metasploit, Nuclei, CTF labs, and bug bounty platforms simultaneously
 - **Structured Pydantic Models**: All data validated and serialized with full type safety and JSON Schema support
-- **MCP Server Integration**: 21 AI-native tools via Model Context Protocol for Claude Desktop, Cursor, and other AI agents
+- **MCP Server Integration**: 22 AI-native tools via Model Context Protocol for Claude Desktop, Cursor, and other AI agents
 - **Bug Bounty Toolkit**: Complete hunter toolkit with checklists, workflows, report templates, prioritization engine, and scope management
-- **Rich CLI**: 12 commands with colorized tables, progress bars, and bulk processing
+- **Rich CLI**: 13 commands with colorized tables, progress bars, and bulk processing
 - **Composable Output**: `table`, `json`, `csv`, `md`, and `sarif` output on read commands, plus a stable [exit-code contract](#output-formats--exit-codes) for scripting and CI
 - **CI Security Gate**: `bulk --fail-on kev|critical|high|epss>=N` fails the build on policy matches and emits SARIF 2.1.0 for GitHub code scanning
 - **Caching & Offline Mode**: persistent, TTL'd HTTP response cache and a first-class `--offline` mode for air-gapped or repeatable runs
@@ -117,7 +117,7 @@ pocmap --offline lookup CVE-2021-44228
 pocmap --help
 ```
 
-### CLI Commands (12)
+### CLI Commands (13)
 
 | Command | Purpose |
 |---------|---------|
@@ -131,6 +131,7 @@ pocmap --help
 | `schemas` | Export JSON schemas for all data models |
 | `latest` | Find recently published CVEs with exploit intelligence |
 | `discover` | Discover CVEs affecting a product by name and version |
+| `package` | Find vulnerabilities in a dependency and the releases that fix them |
 | `doctor` | Run self-diagnostics (Python, extras, tokens, cache, connectivity) |
 | `cache` | Inspect (`info`) and clear (`clear`) the persistent HTTP cache |
 
@@ -239,7 +240,8 @@ paths = export_schemas("./schemas")
 #            LabEnvironment.json, BugBountyReport.json,
 #            CPEInfo.json, RecentExploitResult.json, ReportEntry.json,
 #            MultiReport.json, VersionConstraint.json,
-#            ProductDiscoveryResult.json
+#            ProductDiscoveryResult.json,
+#            PackageVulnerability.json, PackageDiscoveryResult.json
 ```
 
 ## Bug Bounty Toolkit
@@ -551,6 +553,90 @@ attributes (`versionStartIncluding` / `versionEndExcluding`), which is where mod
 records express affected ranges — the literal version field in the CPE string is usually
 just `*`.
 
+## Dependency Vulnerabilities
+
+`pocmap discover` answers "is the nginx we run vulnerable". `pocmap package` answers the
+other half: **is the dependency we ship vulnerable, and what do we upgrade to.**
+
+The two are keyed differently and are not interchangeable. NVD files vulnerabilities
+against a CPE *product*, which is right for deployed software but carries no package
+coordinate and no fix version. [OSV.dev](https://osv.dev) files them against a *package*
+(`PyPI/django`, `Maven/org.apache.logging.log4j:log4j-core`) and records the releases that
+fix each one. OSV needs no API key and is not bound by NVD's 5-requests-per-30-seconds
+limit, so this path stays fast without `NVD_API_KEY`.
+
+```bash
+# What's wrong with the version we actually ship, and what fixes it
+pocmap package PyPI django --version 3.2.0
+pocmap package npm lodash --version 4.17.20
+pocmap package Maven org.apache.logging.log4j:log4j-core --version 2.14.1
+
+# Ecosystem names are case-insensitive here and normalized for you
+pocmap package pypi requests --version 2.25.0
+pocmap package debian:12 nginx
+
+# Only what you can actually act on, as JSON
+pocmap package PyPI django --version 3.2.0 --fixable-only --format json
+
+# SARIF for code scanning, in a CI dependency gate
+pocmap package npm lodash --version 4.17.20 --format sarif --output out/
+```
+
+```
+Package Vulnerabilities: Maven/org.apache.logging.log4j:log4j-core@2.14.1
+Found 7 | with a fix: 7 | no fix published: 0
+Severity  CVSS   EPSS  KEV  Advisory        Fixed in
+CRITICAL  10.0  100.0  yes  CVE-2021-44228  2.15.0, 2.3.1, 2.12.2
+CRITICAL   9.0  100.0  yes  CVE-2021-45046  2.16.0, 2.12.2
+HIGH       8.6  100.0       CVE-2021-45105  2.12.3, 2.17.0, 2.3.1
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--version`, `-v` | Installed version. Strongly recommended — OSV then evaluates its own affected ranges and returns only advisories that genuinely apply. |
+| `--fixable-only` | Only advisories with a published fix. Applied *after* ranking and `--limit`, so it narrows the top-N by risk rather than fetching N fixable ones. |
+| `--limit` | Maximum advisories (1-1000, default: 100), taken from the top of the risk ranking. |
+| `--output`, `-o` | Save the JSON report to a file. |
+| `--format`, `-f` | `table` (default), `json`, `csv`, `md`, `sarif`. |
+| `--quiet`, `-q` | Suppress decorative output. |
+
+**Supported ecosystems.** All 50 OSV ecosystems, including `PyPI`, `npm`, `Go`, `Maven`,
+`crates.io`, `RubyGems`, `Packagist`, `NuGet`, `Hex`, `Pub`, `CRAN`, `Hackage`,
+`ConanCenter`, `SwiftURL`, `vcpkg`, and the distributions `Debian`, `Ubuntu`, `Alpine`,
+`Red Hat`, `Rocky Linux`, `AlmaLinux`, `SUSE`, `Wolfi`, `Chainguard` and `Bitnami`. OSV
+itself is case-**sensitive** (`pypi` is rejected outright); pocmap normalizes common
+spellings and aliases first, so `pypi`, `cargo`, `golang`, `composer` and `debian:12` all
+resolve. A release qualifier is preserved: `alpine:v3.19` -> `Alpine:v3.19`.
+
+### Reading the results
+
+**Ranking is by exploitation risk, not CVSS.** Results are ordered CISA KEV first, then
+EPSS, then CVSS — the top row is what is actually being exploited, which is often not the
+highest-scoring entry. EPSS and KEV come from bulk catalogues pocmap already caches, so
+enriching a 100-advisory result costs two cached downloads, not 100 API calls.
+
+**Several `Fixed in` versions is normal.** Maintainers backport a fix to each supported
+branch, so log4j-core is fixed in `2.3.1`, `2.12.2` *and* `2.15.0`. Take the one on your
+own major version.
+
+**An empty result is not proof of safety.** OSV returns an empty body both for a package
+it has never heard of and for one with no known issues, so the two are indistinguishable
+— check the spelling first. This matters most for Maven, where the name must be the full
+`groupId:artifactId`; a bare `log4j-core` matches nothing and looks clean.
+
+**Counts describe different things.** `total_found` is how many advisories were found;
+`returned`/`truncated` describe what `--limit` left. `--fixable-only` never reports a
+package as clean — if it empties the list, the output says how many were filtered out.
+
+**`no fix published` means exactly that** — the advisory is real and there is no upgrade
+to take, so it needs a workaround or a risk decision rather than a version bump.
+
+**Severity source.** A CVSS 3.x vector is scored locally to a base score. CVSS 4.0 scores
+via a lookup table that pocmap does not implement, so a 4.0-only advisory shows `-` for
+CVSS and falls back to the publisher's own rating rather than a plausible-but-wrong number.
+
 ## Output Formats & Exit Codes
 
 Read commands emit machine-readable output via `--format/-f`. `--format` and `--quiet/-q`
@@ -702,8 +788,8 @@ decompression bomb cannot fill the disk, and archive members that are absolute, 
 |----------|---------|-------------|
 | `POCMAP_ALLOW_FETCH_POC_SOURCE` | `false` | Master switch. Nothing is fetched unless this is set. |
 | `POCMAP_POC_SOURCE_DIR` | `<cache_dir>/poc-source` | Extraction root. |
-| `POCMAP_POC_SOURCE_MAX_MB` | `20` | Per-repo cap on download and extracted size. |
-| `POCMAP_POC_SOURCE_TOTAL_MAX_MB` | `500` | Total cap; oldest fetched repos are evicted first. |
+| `POCMAP_POC_SOURCE_MAX_MB` | `100` | Per-repo cap on download and extracted size. |
+| `POCMAP_POC_SOURCE_TOTAL_MAX_MB` | `1000` | Total cap; oldest fetched repos are evicted first. |
 
 Offline mode has nothing to serve here — tarballs deliberately bypass the HTTP response
 cache — so `--offline` reports that plainly instead of failing obscurely.
@@ -796,7 +882,7 @@ GitHub Actions job that runs the gate and uploads the SARIF to code scanning, an
 
 ## AI Agent Integration
 
-PocMap includes a full MCP (Model Context Protocol) server exposing 21 AI-native tools for integration with Claude Desktop, Cursor, and other MCP-compatible clients.
+PocMap includes a full MCP (Model Context Protocol) server exposing 22 AI-native tools for integration with Claude Desktop, Cursor, and other MCP-compatible clients.
 
 ### MCP Server Setup for Claude Desktop
 
@@ -868,7 +954,7 @@ pocmap-mcp --debug
 Repo-root `python mcp_server.py` is a thin launcher shim to the same module (handy in a
 git checkout). See also [`examples/mcp-config.json`](examples/mcp-config.json).
 
-### MCP Tools (21 Total)
+### MCP Tools (22 Total)
 
 | Tool | Category | Description |
 |------|----------|-------------|
@@ -886,6 +972,7 @@ git checkout). See also [`examples/mcp-config.json`](examples/mcp-config.json).
 | `find_vulhub_docker` | Labs | Vulhub Docker Compose environment with setup steps |
 | `find_recent_exploits` | Discovery | Recently published CVEs with PoC/KEV/severity filters |
 | `discover_product_cves` | Discovery | Find CVEs by product name with version constraints |
+| `discover_package_cves` | Discovery | **Dependency vulnerabilities + the releases that fix them** (OSV, no API key) |
 | `cve_to_cpe` | Conversion | Convert CVE to affected CPE identifiers |
 | `cpe_to_cve` | Conversion | Find all CVEs affecting a given product (CPE) |
 | `generate_json_report` | Reports | **One-shot CVE assessment** — details + all exploits + labs + bug bounty reports for one or many CVEs in a single call |
@@ -946,6 +1033,8 @@ for p in paths:
 # MultiReport.json
 # VersionConstraint.json
 # ProductDiscoveryResult.json
+# PackageVulnerability.json
+# PackageDiscoveryResult.json
 ```
 
 Use these schemas for:
@@ -991,7 +1080,7 @@ Use these schemas for:
 1. **Presentation Layer**: CLI (`cli.py`) + MCP Server (`pocmap.mcp_server` / `pocmap-mcp`)
 2. **Service Layer**: Business logic (7 services: CVE, Exploit, Lab, Report, Bug Bounty, Recent, Product Discovery)
 3. **Client Layer**: External API clients (NVD, GitHub, CVE.org, ExploitDB, etc.)
-4. **Model Layer**: 13 Pydantic models with full validation and JSON Schema support (11 exported as standalone JSON schemas)
+4. **Model Layer**: 16 Pydantic models with full validation and JSON Schema support (13 exported as standalone JSON schemas)
 5. **Utility Layer**: HTTP client with retries, formatters, validators, config
 6. **Toolkit Layer**: Bug bounty hunter toolkit (checklists, methodology, templates, prioritization, scope, automation)
 
@@ -1066,8 +1155,8 @@ EOF
 | `POCMAP_OFFLINE` | false | Serve HTTP only from cache; a miss errors instead of hitting the network |
 | `POCMAP_ALLOW_FETCH_POC_SOURCE` | false | Opt in to downloading PoC **source code** to disk (see below) |
 | `POCMAP_POC_SOURCE_DIR` | `<cache>/poc-source` | Where fetched PoC source is extracted |
-| `POCMAP_POC_SOURCE_MAX_MB` | 20 | Per-repo cap, applied to download **and** extracted size |
-| `POCMAP_POC_SOURCE_TOTAL_MAX_MB` | 500 | Total on-disk cap for fetched sources |
+| `POCMAP_POC_SOURCE_MAX_MB` | 100 | Per-repo cap, applied to download **and** extracted size |
+| `POCMAP_POC_SOURCE_TOTAL_MAX_MB` | 1000 | Total on-disk cap for fetched sources |
 
 See [Caching & Offline Mode](#caching--offline-mode) and the [exit-code contract](#output-formats--exit-codes)
 for how these behave at runtime.

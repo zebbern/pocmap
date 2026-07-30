@@ -124,11 +124,16 @@ def render_sarif(cves: list[dict[str, Any]], *, tool_version: str) -> str:
             base_score = None
             severity = None
 
-        # Per-CVE rule carries the NVD helpUri (results cannot hold helpUri).
+        # Per-CVE rule carries the advisory helpUri (results cannot hold one).
+        # Defaults to NVD, but a row may override it: an OSV advisory keyed on
+        # GHSA-/RUSTSEC-/PYSEC- has no NVD page, so the default would 404.
+        help_uri = cve.get("help_uri")
         cve_rule: dict[str, Any] = {
             "id": cve_id,
             "name": cve_id,
-            "helpUri": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
+            "helpUri": (
+                str(help_uri) if help_uri else f"https://nvd.nist.gov/vuln/detail/{cve_id}"
+            ),
         }
         if description:
             cve_rule["shortDescription"] = {"text": _truncate(description)}

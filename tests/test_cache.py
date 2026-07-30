@@ -43,6 +43,11 @@ class _FakeResponse:
     def __init__(self, status_code: int = 200, body: str = '{"v": 1}') -> None:
         self.status_code = status_code
         self.text = body
+        # A real Response always exposes the raw bytes; get_text reads them to
+        # detect a gzip-framed body, so the stub must carry them too.
+        self.content = body.encode("utf-8")
+        self.encoding = "utf-8"
+        self.url = "https://api.example/data"
         self.headers: dict[str, str] = {}
         self.is_redirect = False
 

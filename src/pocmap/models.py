@@ -234,6 +234,115 @@ class ProductDiscoveryResult(BaseModel):
     )
 
 
+class PackageVulnerability(BaseModel):
+    """A vulnerability affecting one *package* coordinate, as OSV files it.
+
+    Distinct from :class:`CVEInfo`, which is keyed on a CPE product. The unit
+    here is a dependency — ``PyPI/django``, ``Maven/org.apache…:log4j-core`` —
+    so this model carries the one thing a CPE record cannot: the releases that
+    fix the issue.
+
+    ``fixed_versions`` is scoped to the queried package. One advisory covers
+    every package that ships the vulnerable code and their fix streams differ,
+    so a version listed here is a real upgrade target for *this* package only.
+    Several entries are normal rather than contradictory — a project backports
+    a fix to each maintained branch.
+
+    An empty ``fixed_versions`` means no fix is published for this package, not
+    that it is unaffected.
+
+    Attributes:
+        id: OSV identifier (``GHSA-…``, ``PYSEC-…``, ``RUSTSEC-…``, ``CVE-…``).
+        aliases: Other identifiers the advisory is cross-referenced under.
+        cve_ids: CVE identifiers among ``id``/``aliases``; empty is common, as
+            many ecosystem advisories never receive one.
+        summary: One-line advisory title.
+        details: Full advisory prose, when the caller asked for it.
+        severity: Qualitative rating, derived from the CVSS vector when one is
+            scoreable and otherwise from the publisher's own label.
+        cvss_score: CVSS 3.x base score computed from ``cvss_vector``. ``None``
+            for a 4.0-only advisory, which pocmap does not score locally.
+        cvss_vector: The CVSS vector string as published.
+        fixed_versions: Releases fixing this issue *for this package*.
+        introduced_versions: Releases that introduced it.
+        epss: EPSS exploitation probability (0-100), when a CVE alias exists.
+        kev_status: Whether a CVE alias is in the CISA KEV catalog.
+        withdrawn: RFC3339 timestamp if the advisory was retracted.
+        published: Publication timestamp.
+        modified: Last-modified timestamp.
+        url: Canonical OSV page for the advisory.
+    """
+
+    id: str = Field(..., description="OSV advisory identifier")
+    aliases: list[str] = Field(default_factory=list, description="Cross-referenced identifiers")
+    cve_ids: list[str] = Field(default_factory=list, description="CVE identifiers, if any")
+    summary: str | None = Field(default=None, description="One-line advisory title")
+    details: str | None = Field(default=None, description="Full advisory text")
+    severity: Severity = Field(default=Severity.UNKNOWN, description="Qualitative severity")
+    cvss_score: float | None = Field(
+        default=None, ge=0.0, le=10.0, description="CVSS 3.x base score, computed from the vector"
+    )
+    cvss_vector: str | None = Field(default=None, description="Published CVSS vector string")
+    fixed_versions: list[str] = Field(
+        default_factory=list, description="Releases that fix this issue for the queried package"
+    )
+    introduced_versions: list[str] = Field(
+        default_factory=list, description="Releases that introduced this issue"
+    )
+    epss: float | None = Field(
+        default=None, ge=0.0, le=100.0, description="EPSS exploitation probability (0-100)"
+    )
+    kev_status: bool = Field(default=False, description="Listed in the CISA KEV catalog")
+    withdrawn: str | None = Field(default=None, description="Retraction timestamp, if withdrawn")
+    published: str | None = Field(default=None, description="Publication timestamp")
+    modified: str | None = Field(default=None, description="Last-modified timestamp")
+    url: str | None = Field(default=None, description="Canonical OSV advisory URL")
+
+    @field_validator("epss", mode="before")
+    @classmethod
+    def _coerce_pkg_epss(cls, value: Any) -> float | None:
+        """Accept a string or numeric EPSS from upstream."""
+        return _coerce_optional_float(value)
+
+    @property
+    def has_fix(self) -> bool:
+        """Whether at least one fixed release is published for this package."""
+        return bool(self.fixed_versions)
+
+
+class PackageDiscoveryResult(BaseModel):
+    """Result of a package vulnerability query.
+
+    Attributes:
+        ecosystem: Canonical OSV ecosystem the query resolved to.
+        package: Package name as the ecosystem spells it.
+        version: Installed version the query was evaluated against, if given.
+        vulnerabilities: Matching advisories, most severe first.
+        total_found: How many advisories were **found** — not how many are in
+            ``vulnerabilities``, which ``limit`` may have truncated.
+        returned: Length of ``vulnerabilities``.
+        truncated: Whether ``limit`` dropped any advisory from the list.
+        fixable_count: How many of the *returned* advisories have a fixed release.
+        unfixed_count: How many of the *returned* advisories have no published fix.
+        search_sources: Data sources that actually contributed. A source that
+            failed to load is omitted, so its absence means "unavailable" rather
+            than "found nothing".
+    """
+
+    ecosystem: str = Field(description="Canonical OSV ecosystem")
+    package: str = Field(description="Package name")
+    version: str | None = Field(default=None, description="Version the query was evaluated at")
+    vulnerabilities: list[PackageVulnerability] = Field(
+        default_factory=list, description="Matching advisories, most severe first"
+    )
+    total_found: int = Field(default=0, description="Advisories found (before any limit)")
+    returned: int = Field(default=0, description="Advisories in this response")
+    truncated: bool = Field(default=False, description="Whether a limit dropped advisories")
+    fixable_count: int = Field(default=0, description="Returned advisories with a published fix")
+    unfixed_count: int = Field(default=0, description="Returned advisories with no published fix")
+    search_sources: list[str] = Field(default_factory=list, description="Data sources queried")
+
+
 class CVSSScore(BaseModel):
     """CVSS scoring information for a vulnerability.
 
@@ -750,6 +859,8 @@ def export_schemas(output_dir: str | Path) -> list[Path]:
         MultiReport,
         VersionConstraint,
         ProductDiscoveryResult,
+        PackageVulnerability,
+        PackageDiscoveryResult,
     ]
 
     written: list[Path] = []

@@ -2,7 +2,7 @@
 name: pocmap-agent
 description: >
   Use the PocMap Python package for CVE exploit discovery, vulnerability research,
-  and bug bounty hunting. Provides 21 MCP tools and 12 CLI commands for looking up
+  and bug bounty hunting. Provides 22 MCP tools and 13 CLI commands for looking up
   CVEs, finding exploits/PoCs, discovering recent vulnerabilities, product-based
   CVE discovery, CPE/CVSS analysis, bug bounty report lookup, and practice lab
   environments. Trigger when the user mentions CVE lookup, exploit discovery,
@@ -33,7 +33,7 @@ Run via CLI (both forms work):
 ```bash
 pocmap lookup CVE-2021-44228
 python -m pocmap lookup CVE-2021-44228
-python -m pocmap --help      # authoritative list of all 12 commands
+python -m pocmap --help      # authoritative list of all 13 commands
 ```
 
 Use in Python (synchronous; services are context managers):
@@ -198,8 +198,8 @@ loaded from env + optional repo-root `.env`. Verified variables:
 
 ## References
 
-- `references/mcp_tools.md` — all 21 MCP tools with parameters and return shapes.
-- `references/cli_commands.md` — all 12 CLI commands with real flags.
+- `references/mcp_tools.md` — all 22 MCP tools with parameters and return shapes.
+- `references/cli_commands.md` — all 13 CLI commands with real flags.
 
 ## External Links
 

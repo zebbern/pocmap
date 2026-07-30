@@ -38,6 +38,7 @@ from pocmap.services.bb_service import BugBountyService
 from pocmap.services.cve_service import CVEService
 from pocmap.services.exploit_service import ExploitService
 from pocmap.services.lab_service import LabService
+from pocmap.services.package_service import PackageService
 from pocmap.services.product_service import ProductDiscoveryService
 from pocmap.services.recent_service import RecentService
 from pocmap.utils.http import (
@@ -259,10 +260,11 @@ class ServiceAdapter:
         self._lab: Any = LabService()
         self._recent: Any = RecentService()
         self._product: Any = ProductDiscoveryService()
+        self._package: Any = PackageService()
 
     def close(self) -> None:
         """Close all services to release resources."""
-        for svc_name in ("_recent", "_product", "_cve", "_exploit", "_bb", "_lab"):
+        for svc_name in ("_recent", "_product", "_package", "_cve", "_exploit", "_bb", "_lab"):
             svc = getattr(self, svc_name, None)
             if svc is not None and hasattr(svc, "close"):
                 with suppress(Exception):
@@ -685,7 +687,93 @@ class ServiceAdapter:
                 "retryable": retryable,
             }
 
+    # -- Package Discovery --
+
+    def discover_package_cves(
+        self,
+        ecosystem: str,
+        name: str,
+        version: str = "",
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Find vulnerabilities affecting a package coordinate via OSV.
+
+        Args:
+            ecosystem: Package ecosystem (``PyPI``, ``npm``, ``Maven``, ...).
+            name: Package name as the ecosystem spells it.
+            version: Installed version, or "" for every known advisory.
+            limit: Maximum advisories to return.
+
+        Returns:
+            Normalized dict with the query echo and a ranked vulnerability list.
+        """
+        try:
+            result = self._package.discover_package(
+                ecosystem=ecosystem,
+                package=name,
+                version=version or None,
+                limit=limit,
+            )
+            return self._normalize_package_result(result)
+        except Exception as e:
+            if is_programming_error(e):
+                raise
+            logger.warning(f"Package discovery failed: {e}")
+            category, retryable = categorize_exception(e)
+            return {
+                "error": f"Package discovery failed ({type(e).__name__}): {e}",
+                "ecosystem": ecosystem,
+                "package": name,
+                "category": category,
+                "error_type": type(e).__name__,
+                "retryable": retryable,
+            }
+
     # -- Normalizers --
+
+    @staticmethod
+    def _normalize_package_vuln(vuln: Any) -> dict[str, Any]:
+        """Flatten a PackageVulnerability for the wire.
+
+        ``epss_score`` is on the 0.0-1.0 scale to match every other MCP tool;
+        the model stores 0-100.
+        """
+        epss = getattr(vuln, "epss", None)
+        return {
+            "id": vuln.id,
+            "cve_ids": list(vuln.cve_ids),
+            "aliases": list(vuln.aliases),
+            "summary": vuln.summary,
+            "severity": ServiceAdapter._enum_val(vuln.severity, "UNKNOWN"),
+            "cvss_score": vuln.cvss_score,
+            "cvss_vector": vuln.cvss_vector,
+            "epss_score": round(epss / 100.0, 5) if epss is not None else None,
+            "kev_status": bool(vuln.kev_status),
+            "fixed_versions": list(vuln.fixed_versions),
+            "introduced_versions": list(vuln.introduced_versions),
+            "has_fix": bool(vuln.fixed_versions),
+            "withdrawn": vuln.withdrawn,
+            "published": vuln.published,
+            "url": vuln.url,
+        }
+
+    @staticmethod
+    def _normalize_package_result(result: Any) -> dict[str, Any]:
+        """Flatten a PackageDiscoveryResult for the wire."""
+        return {
+            "ecosystem": result.ecosystem,
+            "package": result.package,
+            "version": result.version,
+            "total_found": result.total_found,
+            "returned": result.returned,
+            "truncated": result.truncated,
+            "fixable_count": result.fixable_count,
+            "unfixed_count": result.unfixed_count,
+            "search_sources": list(result.search_sources),
+            "vulnerabilities": [
+                ServiceAdapter._normalize_package_vuln(v) for v in result.vulnerabilities
+            ],
+        }
 
     @staticmethod
     def _enum_val(value: Any, default: str = "") -> str:
@@ -1662,6 +1750,79 @@ def discover_product_cves(
         return _ok(result)
     except Exception as e:
         return _tool_error(e, f"discover_product_cves({product})")
+
+
+@mcp.tool(
+    name="discover_package_cves",
+    description=(
+        "Find vulnerabilities in a software PACKAGE (a dependency) and the exact releases "
+        "that fix them. Use this whenever the user asks about a library, a dependency, a "
+        "lockfile, an SBOM, or 'what should I upgrade to' — e.g. requirements.txt, "
+        "package.json, pom.xml, go.mod, Gemfile, Cargo.toml. "
+        "This is the ONLY pocmap tool that returns fixed versions; lookup_cve and "
+        "discover_product_cves are keyed on CPE products and cannot answer 'what do I "
+        "upgrade to'. Conversely this tool CANNOT answer questions about deployed products "
+        "like nginx, Confluence or FortiOS — use discover_product_cves for those. "
+        "Backed by OSV.dev (no API key, no NVD rate limit) and enriched with EPSS and CISA "
+        "KEV, so results are ranked by real-world exploitation risk: KEV first, then EPSS, "
+        "then CVSS. "
+        "Always pass 'version' when the user knows it — OSV then returns only advisories "
+        "that genuinely apply to that release instead of every one ever filed. "
+        "Ecosystem is case-insensitive here ('pypi' works) and Maven names need the full "
+        "'groupId:artifactId'. "
+        "Note fixed_versions often lists SEVERAL releases: maintainers backport a fix to "
+        "each supported branch, so pick the one on the user's major version."
+    ),
+)
+def discover_package_cves(
+    ecosystem: str,
+    name: str,
+    version: str = "",
+    limit: int = 50,
+) -> str:
+    """Find vulnerabilities affecting a package and the releases that fix them.
+
+    Args:
+        ecosystem: Package ecosystem — PyPI, npm, Go, Maven, crates.io, RubyGems,
+                   Packagist, NuGet, Hex, Pub, or a distro (Debian:12, Ubuntu:22.04,
+                   Alpine:v3.19, Red Hat, Rocky Linux, SUSE, Bitnami).
+        name: Package name as that ecosystem spells it. Maven requires the full
+              'groupId:artifactId' (e.g. 'org.apache.logging.log4j:log4j-core');
+              a bare artifact name matches nothing and looks falsely clean.
+        version: Installed version (e.g. '3.2.0'). Strongly recommended.
+        limit: Maximum advisories to return (1-500, default: 50).
+
+    Returns:
+        JSON string with ecosystem, package, version, total_found, fixable_count,
+        unfixed_count, search_sources, and a 'vulnerabilities' list ranked
+        highest-risk first. Each entry has id, cve_ids, aliases, summary,
+        severity, cvss_score, cvss_vector, epss_score (0.0-1.0), kev_status,
+        fixed_versions, introduced_versions, has_fix, withdrawn, published, url.
+        An empty list means OSV knows of nothing affecting this coordinate — it
+        cannot distinguish that from an unknown package, so check the spelling
+        before reporting a dependency as clean.
+    """
+    try:
+        limit = max(1, min(500, limit))
+        result = _svc.discover_package_cves(
+            ecosystem=ecosystem,
+            name=name,
+            version=version,
+            limit=limit,
+        )
+        if "error" in result:
+            return json.dumps({
+                "error": result["error"],
+                "error_type": result.get("error_type", "unknown"),
+                "category": result.get("category", "unknown"),
+                "retryable": result.get("retryable", False),
+                "context": f"discover_package_cves({ecosystem}/{name})",
+                "ecosystem": ecosystem,
+                "package": name,
+            })
+        return _ok(result)
+    except Exception as e:
+        return _tool_error(e, f"discover_package_cves({ecosystem}/{name})")
 
 
 # ---------------------------------------------------------------------------

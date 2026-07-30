@@ -28,6 +28,7 @@ import pytest
 
 import pocmap.clients.codeload_client as codeload_mod
 from pocmap.clients.codeload_client import (
+    ArchiveTooLargeError,
     CodeloadClient,
     PoCSourceDisabledError,
     parse_repo_url,
@@ -426,6 +427,69 @@ def test_archive_permissions_are_normalized(tmp_path: Path, enabled: None) -> No
     src = client.fetch("owner", "repo")
     mode = (src.path / "repo" / "suid").stat().st_mode
     assert not mode & 0o4000, "setuid bit survived extraction"
+
+
+def test_oversized_archive_reports_the_cap_not_a_missing_ref(
+    tmp_path: Path, enabled: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A repo that exists but is too big must not read as "does not exist".
+
+    Regression: the size-cap error was an ordinary HTTPError, so the branch loop
+    swallowed it, tried the remaining refs, and finally reported "Could not
+    fetch ... from any of ('refs/heads/main', ...)". kozmer/log4j-shell-poc
+    (1851 stars) is 38.5 MB because it bundles a JDK — the cap was right, the
+    message blamed the wrong thing.
+    """
+    _patch_settings(monkeypatch, allow_fetch_poc_source=True, poc_source_max_mb=1)
+    http = MagicMock()
+    tried: list[str] = []
+
+    def fake_get(url: str, **_: Any) -> Any:
+        tried.append(url.rsplit("/tar.gz/", 1)[-1])
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.iter_content.return_value = [bytes(2 * 1024 * 1024)]
+        return resp
+
+    http.get.side_effect = fake_get
+    client = CodeloadClient(http_client=http, dest_root=tmp_path / "poc-source")
+
+    with pytest.raises(ArchiveTooLargeError) as excinfo:
+        client.fetch("owner", "repo")
+    assert "POCMAP_POC_SOURCE_MAX_MB" in str(excinfo.value)
+    # Stops at the first ref: the others would re-download the same archive.
+    assert tried == ["refs/heads/main"]
+
+
+def test_decompression_bomb_also_reports_the_cap(
+    tmp_path: Path, enabled: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_settings(monkeypatch, allow_fetch_poc_source=True, poc_source_max_mb=1)
+    bomb = _tar_bytes({"repo/big.bin": bytes(8 * 1024 * 1024)})
+    client = _client(tmp_path, bomb)
+
+    with pytest.raises(ArchiveTooLargeError, match="expands beyond"):
+        client.fetch("owner", "repo")
+
+
+def test_a_missing_ref_still_falls_through_to_the_next(
+    tmp_path: Path, enabled: None
+) -> None:
+    """The cap short-circuit must not break ordinary 404 fallback."""
+    blob = _tar_bytes({"repo/exploit.py": b"x"})
+    http = MagicMock()
+
+    def fake_get(url: str, **_: Any) -> Any:
+        if url.endswith("refs/heads/main"):
+            raise HTTPError("404", status_code=404)
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.iter_content.return_value = [blob]
+        return resp
+
+    http.get.side_effect = fake_get
+    client = CodeloadClient(http_client=http, dest_root=tmp_path / "poc-source")
+    assert client.fetch("owner", "repo").branch == "master"
 
 
 def test_falls_back_to_head_for_a_non_standard_default_branch(

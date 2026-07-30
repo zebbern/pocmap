@@ -4,7 +4,7 @@ This document is designed specifically for AI agents (Claude, GPT, Cursor, etc.)
 
 ## Overview
 
-PocMap provides 21 MCP tools, 3 resources, and 3 prompts for comprehensive vulnerability intelligence. All tools return JSON strings for reliable programmatic parsing.
+PocMap provides 22 MCP tools, 3 resources, and 3 prompts for comprehensive vulnerability intelligence. All tools return JSON strings for reliable programmatic parsing.
 
 **When to use this toolkit:**
 - User asks about a specific CVE ID
@@ -154,14 +154,28 @@ Tell them to move it into their MCP client config's `env` block — the same pla
 | `find_practice_labs` | User wants hands-on practice environments | Labs with `platform` (hackthebox/tryhackme/vulhub), `name`, `url` |
 | `find_vulhub_docker` | User wants the quickest local Docker setup | Docker URL + `setup_instructions` (clone, cd, docker compose up) |
 
-### Discovery (2 tools)
+### Discovery (3 tools)
 
 | Tool | When to Use | Returns |
 |------|-------------|---------|
 | `find_recent_exploits` | User wants to see newly published CVEs over a time window | Recent CVEs with severity, EPSS, KEV status, and PoC availability |
-| `discover_product_cves` | User asks about vulnerabilities in a product without providing a CVE ID | CVEs grouped by confidence: confirmed, possibly, and not enough data |
+| `discover_product_cves` | User asks about a deployed **product** without giving a CVE ID | CVEs grouped by confidence: confirmed, possibly, and not enough data |
+| `discover_package_cves` | User asks about a **dependency** — a library, lockfile, or SBOM entry | Advisories ranked by risk, each with the releases that fix it |
 
-**Decision rule:** Use `find_recent_exploits` for threat intelligence briefings and monitoring. Use `discover_product_cves` when the user names a product (e.g., "What CVEs affect Apache Struts?") rather than a specific CVE ID.
+**Decision rule — product vs package.** These two are not interchangeable, and picking
+the wrong one produces a confidently empty answer:
+
+* **`discover_product_cves`** is keyed on CPE, the way NVD files vulnerabilities for
+  deployed software: nginx, Confluence, FortiOS, Exchange. It cannot tell you what release
+  fixes anything.
+* **`discover_package_cves`** is keyed on a package coordinate, the way ecosystems ship
+  dependencies: `PyPI/django`, `npm/lodash`, `Maven/org.apache.logging.log4j:log4j-core`.
+  It is the **only** tool here that returns fixed versions.
+
+Asking `discover_package_cves` about "nginx" with no ecosystem is an error, not an empty
+result; asking `discover_product_cves` "what do I upgrade django to" cannot be answered at
+all. Match the tool to how the user is running the software: installed from a package
+manager -> package; deployed as a product -> product.
 
 ### CPE Conversion (2 tools)
 
@@ -571,6 +585,78 @@ is `epss` on the **0-100** scale (not `epss_score` on 0.0-1.0), `references` is 
 object (not a list), and `affected_cpes`/`cpe_matches` are present. On failure the tool
 returns `{"success": false, "error": "..."}`.
 
+### `discover_package_cves`
+
+Find vulnerabilities affecting a package coordinate, with remediation. Backed by
+[OSV.dev](https://osv.dev), which needs no API key and is not subject to NVD's
+5-requests-per-30-seconds limit, then enriched with EPSS and CISA KEV from pocmap's
+existing bulk feeds (two cached downloads for the whole result set — no per-CVE calls, no
+NVD budget).
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `ecosystem` | str | *(required)* | `PyPI`, `npm`, `Go`, `Maven`, `crates.io`, `RubyGems`, `Packagist`, `NuGet`, `Hex`, `Pub`, or a distro (`Debian:12`, `Ubuntu:22.04`, `Alpine:v3.19`, `Red Hat`, `Bitnami`). Case-insensitive here. |
+| `name` | str | *(required)* | Package name as the ecosystem spells it. |
+| `version` | str | `""` | Installed version. Strongly recommended. |
+| `limit` | int | `50` | Maximum advisories (1-500). |
+
+**Returns:**
+```json
+{
+  "ecosystem": "Maven",
+  "package": "org.apache.logging.log4j:log4j-core",
+  "version": "2.14.1",
+  "total_found": 7,
+  "returned": 7,
+  "truncated": false,
+  "fixable_count": 7,
+  "unfixed_count": 0,
+  "search_sources": ["osv", "epss", "cisa_kev"],
+  "vulnerabilities": [
+    {
+      "id": "GHSA-jfh8-c2jp-5v3q",
+      "cve_ids": ["CVE-2021-44228"],
+      "severity": "CRITICAL",
+      "cvss_score": 10.0,
+      "epss_score": 0.9999,
+      "kev_status": true,
+      "fixed_versions": ["2.15.0", "2.3.1", "2.12.2"],
+      "has_fix": true,
+      "url": "https://osv.dev/vulnerability/GHSA-jfh8-c2jp-5v3q"
+    }
+  ]
+}
+```
+
+**Reading the result — six things that will bite you:**
+
+1. **`fixed_versions` usually lists several releases, and they are not alternatives in
+   time order.** Maintainers backport a fix to every supported branch, so log4j-core is
+   fixed in `2.3.1`, `2.12.2` *and* `2.15.0`. Recommend the one on the user's own major
+   version — telling a 2.12.x user to jump to 2.15.0 is a needless major upgrade, and
+   telling a 2.14 user to "upgrade" to 2.3.1 is a downgrade into a different branch.
+2. **An empty `vulnerabilities` list is not proof the package is clean.** OSV returns an
+   empty body for an unknown package *and* for a package with no known issues — they are
+   indistinguishable. Check the spelling before reporting "no vulnerabilities", especially
+   for Maven, where a bare artifact name (`log4j-core` instead of
+   `org.apache.logging.log4j:log4j-core`) matches nothing and looks clean.
+3. **`fixed_versions: []` means no fix is published**, not that the advisory is harmless.
+   Say so explicitly — that is the case where the user needs a workaround, not an upgrade.
+4. **`epss_score` is 0.0-1.0 here** (matching `lookup_cve`), while `cvss_score` is 0-10.
+   `cvss_score` is `null` for an advisory published with only a CVSS 4.0 vector, which
+   pocmap does not score locally; `severity` still carries the publisher's rating.
+5. **`total_found` is what was found; `returned` is what you got.** When `truncated` is
+   true, `limit` dropped the rest — report the real total, not the length of the list, or
+   you understate exposure. `fixable_count`/`unfixed_count` describe the *returned* set.
+6. **`search_sources` lists only the feeds that actually produced data.** If `cisa_kev` is
+   absent, the catalogue was unavailable and every `kev_status: false` in the response is
+   unverified — say so rather than reporting the CVEs as not-exploited.
+
+Results are ordered KEV first, then EPSS, then CVSS — so the top entry is what is actually
+being exploited, which is rarely the same as the highest CVSS.
+
 ### `discover_product_cves`
 
 Discover CVEs affecting a product by name and version. The product name is resolved
@@ -674,6 +760,8 @@ paths = export_schemas("./schemas")
 | `MultiReport.json` | MultiReport | `entries` (dict of CVE ID -> ReportEntry), `generated_at` |
 | `VersionConstraint.json` | VersionConstraint | `major`, `minor`, `patch`, `range_op`, `raw`, `is_wildcard` |
 | `ProductDiscoveryResult.json` | ProductDiscoveryResult | `query`, `normalized_vendor`, `normalized_product`, `version_constraint`, `confirmed_affected`, `possibly_affected`, `not_enough_data`, `total_found`, `search_sources`, `matched_cpes` |
+| `PackageVulnerability.json` | PackageVulnerability | `id`, `aliases`, `cve_ids`, `summary`, `severity`, `cvss_score`, `cvss_vector`, `fixed_versions`, `introduced_versions`, `epss`, `kev_status`, `withdrawn`, `url` |
+| `PackageDiscoveryResult.json` | PackageDiscoveryResult | `ecosystem`, `package`, `version`, `vulnerabilities`, `total_found`, `fixable_count`, `unfixed_count`, `search_sources` |
 
 ### Enum Values Reference
 

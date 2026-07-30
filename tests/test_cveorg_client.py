@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from pocmap.clients.cveorg_client import CVEOrgClient
 
 
@@ -148,3 +150,63 @@ def test_is_kev_miss_returns_none() -> None:
     found, record = client.is_kev("CVE-9999-0000")
     assert found is False
     assert record is None
+
+
+# ---------------------------------------------------------------------------
+# EPSS bulk feed — indexed lookup and header handling
+# ---------------------------------------------------------------------------
+#
+# The bulk feed had been dead: EPSS_CSV_URL pointed at a file that 404'd, so
+# every score silently fell through to the per-CVE FIRST API — one HTTP request
+# per CVE. These pin the two things that make the bulk path work.
+
+
+def _seed_epss(client: CVEOrgClient, text: str) -> None:
+    """Load *text* through the real CSV parsing path, without the network."""
+    import csv as _csv
+
+    rows = [line for line in text.splitlines() if not line.startswith("#")]
+    client._epss_cache = list(_csv.DictReader(rows))
+    client._epss_index = None
+
+
+def test_epss_csv_metadata_comment_is_not_treated_as_the_header() -> None:
+    """The feed opens with '#model_version:...'; DictReader would eat it as the header."""
+    client = _client()
+    _seed_epss(
+        client,
+        "#model_version:v2026.06.15,score_date:2026-07-30T12:03:05Z\n"
+        "cve,epss,percentile\n"
+        "CVE-2021-44228,0.94355,0.99943\n",
+    )
+    assert client.get_epss("CVE-2021-44228") == 94.35
+
+
+def test_epss_lookup_is_indexed_not_scanned() -> None:
+    """Scoring N CVEs must not cost N scans of a ~354k-row catalogue."""
+    client = _client()
+    rows = "\n".join(f"CVE-2021-{i},0.5,0.9" for i in range(1000))
+    _seed_epss(client, f"cve,epss,percentile\n{rows}\n")
+    index = client._ensure_epss_index()
+    assert len(index) == 1000
+    assert index["CVE-2021-500"] == 50.0
+    # Built once and reused, not rebuilt per call.
+    assert client._ensure_epss_index() is index
+
+
+def test_epss_index_skips_unparseable_rows_without_losing_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client()
+    # An index miss falls back to the per-CVE FIRST API; stub it so this stays
+    # offline and so the assertion is about the index, not about the network.
+    monkeypatch.setattr(CVEOrgClient, "_get_epss_from_api", lambda self, cve: None)
+    _seed_epss(
+        client,
+        "cve,epss,percentile\n"
+        "CVE-1111-1111,not-a-number,0.5\n"
+        "CVE-2021-44228,0.94355,0.99\n",
+    )
+    assert client._ensure_epss_index() == {"CVE-2021-44228": 94.35}
+    assert client.get_epss("CVE-1111-1111") is None
+    assert client.get_epss("CVE-2021-44228") == 94.35

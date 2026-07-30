@@ -15,9 +15,9 @@ as suspect until confirmed against source.
 ## The source of truth (authoritative)
 - **MCP tools:** the `@mcp.tool(name=...)` / `@mcp.resource(...)` / `@mcp.prompt(...)`
   decorators in `src/pocmap/mcp_server.py`. Grep: `@mcp\.(tool|resource|prompt)`.
-  There should be **19 tools, 3 resources, 3 prompts**.
+  There should be **22 tools, 3 resources, 3 prompts**.
 - **CLI commands:** the `@app.command()` functions in `src/pocmap/cli.py`
-  (the function name is the command name). There should be **12 commands** (11 top-level
+  (the function name is the command name). There should be **13 commands** (12 top-level
   `@app.command()` plus the `cache` sub-app added via `app.add_typer(cache_app,
   name="cache")`, which contributes `cache info` and `cache clear`).
 - **Python API:** the classes/methods in `src/pocmap/services/*.py` and models in

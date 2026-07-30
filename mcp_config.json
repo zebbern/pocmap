@@ -1,6 +1,6 @@
 {
   "name": "PocMap",
-  "version": "2.4.2",
+  "version": "2.5.0",
   "description": "MCP Server for CVE lookup, exploit discovery, and vulnerability reporting. Enables AI agents to search for CVE details, find PoCs from GitHub/Metasploit/ExploitDB/Nuclei, discover bug bounty reports, find CTF labs, and generate vulnerability reports.",
   "author": "PocMap Team",
   "license": "MIT",
@@ -13,19 +13,29 @@
     },
     "stdio_uvx": {
       "command": "uvx",
-      "args": ["--from", "pocmap[server]", "pocmap-mcp"],
-      "description": "STDIO via uvx — no local install (requires uv on PATH)",
+      "args": [
+        "--from",
+        "pocmap[server]",
+        "pocmap-mcp"
+      ],
+      "description": "STDIO via uvx \u2014 no local install (requires uv on PATH)",
       "env": {}
     },
     "stdio_module": {
       "command": "python",
-      "args": ["-m", "pocmap.mcp_server"],
+      "args": [
+        "-m",
+        "pocmap.mcp_server"
+      ],
       "description": "STDIO via python -m pocmap.mcp_server",
       "env": {}
     },
     "sse": {
       "command": "pocmap-mcp",
-      "args": ["--transport", "sse"],
+      "args": [
+        "--transport",
+        "sse"
+      ],
       "description": "SSE transport for remote access and browser-based clients",
       "env": {
         "POCMAP_HOST": "127.0.0.1",
@@ -35,7 +45,11 @@
   },
   "claude_desktop": {
     "command": "uvx",
-    "args": ["--from", "pocmap[server]", "pocmap-mcp"],
+    "args": [
+      "--from",
+      "pocmap[server]",
+      "pocmap-mcp"
+    ],
     "description": "Recommended Claude Desktop / MCP client config (uvx + pocmap[server])"
   },
   "resources": {
@@ -77,6 +91,12 @@
       },
       "output_schema": "string - KEV catalog status"
     },
+    "get_attack_techniques": {
+      "description": "MITRE ATT&CK techniques a CVE maps to, curated by the Center for Threat-Informed Defense over the CISA KEV catalogue. Read mapping_type: exploitation_technique is how the CVE itself is exploited; primary_impact/secondary_impact are what follows. Most CVEs have no curated mapping, so total_count 0 means 'no mapping exists', NOT 'harmless'.",
+      "input_schema": {
+        "cve_id": "string - CVE identifier (e.g. 'CVE-2021-44228')"
+      }
+    },
     "find_github_pocs": {
       "description": "Find GitHub PoC repositories for a CVE",
       "input_schema": {
@@ -84,6 +104,13 @@
         "limit": "integer - Max results (default: 10)"
       },
       "output_schema": "string - Formatted list of GitHub PoCs"
+    },
+    "verify_github_pocs": {
+      "description": "Read the SOURCE of the top GitHub PoC repos for a CVE and score whether each really exploits it: confirmed (names the CVE in code AND ships code), likely (a writeup), unverified (has code but never names this CVE), unrelated (a link index). Requires the operator to set POCMAP_ALLOW_FETCH_POC_SOURCE=1, since it writes third-party exploit code to disk; returns a 'not_enabled' error otherwise.",
+      "input_schema": {
+        "cve_id": "string - CVE identifier (e.g. 'CVE-2021-44228')",
+        "limit": "integer - how many top-ranked PoCs to fetch and score, 1-20 (default 5)"
+      }
     },
     "find_metasploit_module": {
       "description": "Find a Metasploit module for a CVE",
@@ -168,6 +195,15 @@
       },
       "output_schema": "string - CVEs grouped into confirmed/possibly-affected/not-enough-data, plus search_sources (nvd_cpe_match = authoritative, nvd_keyword_search = degraded full-text fallback) and matched_cpes"
     },
+    "discover_package_cves": {
+      "description": "Find vulnerabilities in a software PACKAGE (a dependency) and the exact releases that fix them. Use for lockfiles/SBOMs (requirements.txt, package.json, pom.xml, go.mod, Gemfile, Cargo.toml). The only pocmap tool returning fixed versions; it cannot answer questions about deployed products like nginx or Confluence (use discover_product_cves). Backed by OSV.dev (no API key) and enriched with EPSS + CISA KEV, ranked KEV > EPSS > CVSS.",
+      "input_schema": {
+        "ecosystem": "string - PyPI, npm, Go, Maven, crates.io, RubyGems, Packagist, NuGet, Debian:12, ... (case-insensitive)",
+        "name": "string - package name; Maven needs the full 'groupId:artifactId'",
+        "version": "string - installed version, e.g. '3.2.0' (optional but strongly recommended)",
+        "limit": "integer - max advisories to return, 1-500 (default 50)"
+      }
+    },
     "find_recent_exploits": {
       "description": "Discover recently published CVEs with exploit intelligence and filters",
       "input_schema": {
@@ -202,23 +238,34 @@
   "prompts": {
     "vulnerability_assessment": {
       "description": "Structured vulnerability assessment workflow for analyzing CVEs",
-      "arguments": ["cve_id"],
+      "arguments": [
+        "cve_id"
+      ],
       "use_case": "Comprehensive CVE analysis with risk scoring and remediation recommendations"
     },
     "exploit_research": {
       "description": "Deep exploit research prompt for analyzing exploit code and building detection rules",
-      "arguments": ["cve_id", "focus_area"],
+      "arguments": [
+        "cve_id",
+        "focus_area"
+      ],
       "use_case": "Technical exploit analysis with detection engineering focus"
     },
     "bug_bounty_analysis": {
       "description": "Analyze bug bounty reports to extract exploitation techniques and security lessons",
-      "arguments": ["cve_id"],
+      "arguments": [
+        "cve_id"
+      ],
       "use_case": "Real-world impact analysis from bug bounty write-ups"
     }
   },
   "dependencies": {
     "python": ">=3.10",
-    "packages": ["pocmap[server]", "mcp>=2.0,<3", "pydantic>=2.0.0"],
+    "packages": [
+      "pocmap[server]",
+      "mcp>=2.0,<3",
+      "pydantic>=2.0.0"
+    ],
     "install": "pip install \"pocmap[server]\"  # or: uvx --from pocmap[server] pocmap-mcp"
   }
 }

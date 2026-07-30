@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-07-31
+
+Adds the dependency axis. Everything before this release was keyed on a CPE *product* —
+right for software you deploy, but it carries no package coordinate and no fixed version,
+so pocmap could not answer the most common question an agent gets asked about a repository:
+*this lockfile pins version X — is that bad, and what do I upgrade to?*
+
+Evaluated OSV.dev against the live API before building on it. It is **not** a replacement
+for the NVD/CPE path: OSV rejects a bare product name outright (`nginx` → HTTP 400,
+ecosystem is mandatory), so `discover` is unaffected. It is complementary — strong exactly
+where the CPE path is blind.
+
+### Added
+- **`pocmap package <ecosystem> <name> [--version]` and the `discover_package_cves` MCP
+  tool** (22 tools, 13 CLI commands). Finds vulnerabilities in a dependency and, uniquely,
+  **the releases that fix them**. Supports all 50 OSV ecosystems — PyPI, npm, Go, Maven,
+  crates.io, RubyGems, Packagist, NuGet, Hex, Pub, and distributions (Debian, Ubuntu,
+  Alpine, Red Hat, Rocky Linux, SUSE, Bitnami, Wolfi, Chainguard). Needs no API key and is
+  not subject to NVD's 5-requests-per-30-seconds limit. `table`/`json`/`csv`/`md`/`sarif`
+  output and the usual exit-code contract.
+- **Fixed versions are scoped to the queried package.** One advisory covers every package
+  shipping the vulnerable code, and their fix streams differ: Log4Shell's
+  `GHSA-jfh8-c2jp-5v3q` lists `2.15.0`/`2.3.1`/`2.12.2` for `log4j-core` but
+  `1.9.2`/`1.10.8`/`1.11.10`/`2.0.11` for the `org.ops4j.pax.logging` repackager. A flat
+  read of `affected[]` would tell a log4j-core user to "upgrade" to 1.9.2.
+- **Results are ranked by exploitation risk, not CVSS** — CISA KEV first, then EPSS, then
+  CVSS. EPSS and KEV come from bulk catalogues pocmap already caches, so enriching a
+  100-advisory result costs two cached downloads rather than 100 API calls, and spends no
+  NVD budget at all.
+- **Duplicate advisories collapse.** Several databases feed OSV, so one CVE arrives more
+  than once — Django 3.2.0 returns 56 records for 30 distinct CVEs, `requests` 16 for 8.
+  The duplicate is usually the *poorer* record (PYSEC entries carry no CVSS), so the old
+  behaviour would have shown the same vulnerability as CRITICAL in one row and UNKNOWN in
+  the next. The richest record survives; identifiers and version lists are folded in.
+- **CVSS 3.x base scores are computed from the vector** (`pocmap.utils.cvss`). OSV
+  publishes vectors but never numbers, so results were previously unsortable. Validated
+  against **7,701 CVSS 3.x vectors published by NVD with zero mismatches** on both score
+  and severity band. CVSS 4.0 scores via a lookup table that is deliberately *not*
+  implemented — a close-but-wrong number is worse than none in a patch-prioritisation
+  tool — so a 4.0-only advisory falls back to the publisher's own rating.
+- `HTTPClient.post_json_cached()`: a POST whose query lives in its body is a read, so it
+  now gets the persistent cache, offline mode, throttle detection and SSRF validation that
+  every GET already had. `HTTPCache.make_key()` gained an optional `body` component, folded
+  in only when supplied so existing GET keys stay byte-identical.
+
+### Fixed
+- **The EPSS bulk feed had been dead, and every EPSS lookup was silently paying for it.**
+  `EPSS_CSV_URL` pointed at a file in this repository that does not exist, so the bulk load
+  404'd on every run and each score fell through to the per-CVE FIRST API — one HTTP
+  request per CVE, on every `lookup`, `bulk`, `latest` and `discover`. Now points at
+  FIRST's official gzipped feed (354k rows). Scoring 50 CVEs went from **21.2 s to
+  0.016 s**.
+- **EPSS and KEV lookups are indexed rather than linearly scanned.** Both are
+  whole-catalogue feeds; scoring N CVEs cost N full scans of ~354k rows.
+- **The EPSS CSV's leading `#model_version:` comment is no longer parsed as the header
+  row**, which would have yielded garbage keys even once the feed loaded.
+- **`get_text()` transparently gunzips a gzip-framed body.** `requests` only
+  auto-decompresses when the server sets `Content-Encoding: gzip`; a `.gz` file served as
+  `application/gzip` arrived as raw deflate bytes and would have been cached as mojibake.
+- **A repository that exceeds the size cap now says so.** The cap raised an ordinary
+  `HTTPError`, which the branch-retry loop swallowed before reporting *"Could not fetch
+  from any of ('refs/heads/main', 'refs/heads/master', 'HEAD')"* — blaming a missing repo
+  for a size limit. `kozmer/log4j-shell-poc` (1851 stars, the canonical Log4Shell PoC) is
+  38.5 MB and hit this. Now raises `ArchiveTooLargeError` naming the cap and the variable.
+- SARIF `helpUri` is overridable per row, so a GHSA/RUSTSEC/PYSEC advisory links to OSV
+  instead of a nonexistent NVD page.
+- `mcp_config.json` listed 19 tools and was missing `verify_github_pocs` and
+  `get_attack_techniques`; it now matches the registered set exactly.
+- **An unreachable OSV no longer reads as "no known vulnerabilities."** Everywhere else in
+  pocmap an empty list means "nothing found"; on this path it means "this dependency is
+  safe to ship". A 5xx, a connection failure, a redirect, or a success status with an
+  unparseable body now surface as an upstream error (exit 5) instead of an all-clear.
+- **Package names are matched the way their ecosystem matches them.** OSV stores the
+  normalized name while callers type the one in their manifest, so `Django` — exactly how
+  it appears in a `requirements.txt` — returned 30 advisories with **zero** fixed versions,
+  which the docs tell you to read as "no fix published". Comparison now folds case and
+  applies PEP 503's separator rule, fixing `Django`, `PyYAML`, `zope.interface` and
+  every other capitalized or underscored name.
+- **A distro query no longer inherits another release's fix.** Matching on the base
+  ecosystem alone let a `Debian:12` query pick up a `Debian:11` entry and report its
+  package version as the upgrade target. An exact release match now wins, with the base
+  match kept only as the fallback that lets a bare `Ubuntu` query reach
+  `Ubuntu:Pro:16.04:LTS`.
+- **EPSS/KEV enrichment reports what it actually got.** A feed that failed to load left
+  every advisory marked `kev_status: false` while still claiming `cisa_kev` as a source;
+  an unavailable catalogue is now omitted from `search_sources`. Enrichment also reads both
+  catalogues in bulk, so it makes no per-CVE API calls and works offline.
+- **`--fixable-only` no longer reports a vulnerable package as clean.** Filtering every
+  unfixable advisory out emptied the list and printed "No known vulnerabilities" — the
+  inverse of the finding. The output now says how many were filtered out, and the JSON
+  carries `fixable_only`/`filtered_out`.
+- **`total_found` counts what was found, not what survived `--limit`.** A truncated run
+  under-reported exposure by orders of magnitude; `returned` and `truncated` now say what
+  was shown.
+- An upstream failure under `--format json` emitted a plain-text line onto stdout,
+  breaking `json.loads` and losing the reason; and `--output` was validated only *after*
+  the document had been written to stdout. Both now fail cleanly.
+- Gzip decoding is bounded, so a crafted response body cannot expand without limit.
+
+### Changed
+- **`POCMAP_POC_SOURCE_MAX_MB` now defaults to 100 MB (was 20), and
+  `POCMAP_POC_SOURCE_TOTAL_MAX_MB` to 1000 MB (was 500).** Real PoC repos routinely bundle
+  a JRE, a vulnerable target app or a packet capture; 20 MB rejected the flagship
+  Log4Shell PoC outright. The cap exists to stop a decompression bomb, not to second-guess
+  repository size. The total is kept at 10x the per-repo cap so a default five-repo
+  `verify_github_pocs` run cannot saturate it and evict trees it is about to re-fetch.
+- `HTTPClient` accepts `retry_methods`; the default is unchanged, so the outbound webhook
+  POST is still never retried automatically (a retry there would re-send a notification).
+
 ## [2.4.2] - 2026-07-30
 
 Found by using 2.4.1 as a user would, then measuring rather than generalising. The

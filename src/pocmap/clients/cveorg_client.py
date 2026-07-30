@@ -10,6 +10,7 @@ import csv
 import logging
 import math
 import re
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from pocmap.config import (
@@ -51,6 +52,13 @@ class CVEOrgClient:
         self._client = http_client or HTTPClient(headers=settings.default_headers)
         self._kev_cache: list[dict[str, Any]] | None = None
         self._epss_cache: list[dict[str, str]] | None = None
+        # CVE-keyed lookup indexes over the two bulk datasets above. Both feeds
+        # are whole-catalogue downloads, so scoring N CVEs must not cost N scans.
+        self._epss_index: dict[str, float] | None = None
+        self._kev_index: dict[str, dict[str, Any]] | None = None
+        # Distinguishes "loaded, and the feed was empty" from "not yet loaded",
+        # since the parsed rows are released once the index exists.
+        self._epss_loaded = False
 
     def get_cve_record(self, cve_id: str) -> dict[str, Any] | None:
         """Fetch a CVE record from the CVEProject cvelistV5 GitHub repo.
@@ -226,31 +234,90 @@ class CVEOrgClient:
         Returns:
             EPSS score as a percentage (0-100), or *None* if unavailable.
         """
-        if self._epss_cache is None:
-            self._load_epss_cache()
-
-        if self._epss_cache:
-            for row in self._epss_cache:
-                if row.get("cve", "").upper() == cve_id.upper():
-                    try:
-                        return math.trunc(float(row["epss"]) * 10000) / 100
-                    except (ValueError, KeyError):
-                        continue
+        index = self._ensure_epss_index()
+        if index:
+            score = index.get(cve_id.upper())
+            if score is not None:
+                return score
 
         # Fallback to FIRST API
         return self._get_epss_from_api(cve_id)
 
+    def epss_scores(self) -> dict[str, float]:
+        """Return the whole EPSS catalogue as ``{CVE-ID: score 0-100}``.
+
+        For callers scoring a *set* of CVEs. :meth:`get_epss` falls back to a
+        per-CVE API request on a miss, which is right for a single lookup and
+        wrong for a hundred — it is N network calls, and it fails in offline
+        mode. This is one cached bulk download and then pure dict lookups.
+
+        An empty mapping means the feed did not load, which is distinguishable
+        from "this CVE has no score".
+        """
+        return dict(self._ensure_epss_index())
+
+    def kev_ids(self) -> set[str]:
+        """Return every CVE ID in the CISA KEV catalogue, uppercased.
+
+        Empty means the catalogue did not load — *not* that nothing is known to
+        be exploited. Callers must not report `kev_status: false` off an empty
+        catalogue without saying the source was unavailable.
+        """
+        self.is_kev("CVE-0000-0000")  # forces load + index build
+        return set(self._kev_index or {})
+
+    @staticmethod
+    def _build_epss_index(rows: Iterable[Mapping[str, str]]) -> dict[str, float]:
+        """Fold EPSS rows into a ``{CVE-ID: score 0-100}`` mapping."""
+        index: dict[str, float] = {}
+        for row in rows:
+            cve = str(row.get("cve", "")).upper()
+            if not cve:
+                continue
+            try:
+                index[cve] = math.trunc(float(row["epss"]) * 10000) / 100
+            except (ValueError, KeyError, TypeError):
+                continue
+        return index
+
+    def _ensure_epss_index(self) -> dict[str, float]:
+        """Return the CVE-keyed EPSS index, building it on first use.
+
+        Indexed rather than scanned: the dataset carries ~354k rows, and callers
+        that score a whole result set (a package's vulnerabilities, a bulk
+        report) would otherwise pay a full linear scan *per CVE*.
+
+        Only the index is retained. Keeping the parsed rows as well costs ~120 MB
+        per client for no benefit, and the MCP server holds three clients for the
+        lifetime of the process, so the list is released once folded in.
+        """
+        if self._epss_index is None:
+            if self._epss_cache:
+                # Seeded directly (tests); fold it in without refetching.
+                self._epss_index = self._build_epss_index(self._epss_cache)
+            elif not self._epss_loaded:
+                self._load_epss_cache()
+        return self._epss_index if self._epss_index is not None else {}
+
     def _load_epss_cache(self) -> None:
-        """Load EPSS data from the cached CSV."""
+        """Load EPSS data from the cached CSV straight into the index."""
+        rows: list[dict[str, str]] = []
         try:
             text = fetch_text(EPSS_CSV_URL, headers=settings.default_headers)
             if text:
-                self._epss_cache = list(csv.DictReader(text.splitlines()))
+                # The feed opens with a metadata comment
+                # ("#model_version:...,score_date:..."), which DictReader would
+                # otherwise consume as the header row and yield garbage keys.
+                lines = [ln for ln in text.splitlines() if not ln.startswith("#")]
+                rows = list(csv.DictReader(lines))
         except Exception as exc:
             if is_programming_error(exc) or isinstance(exc, OfflineError):
                 raise
             logger.warning("Failed to load EPSS cache: %s", exc)
-            self._epss_cache = []
+        self._epss_index = self._build_epss_index(rows)
+        # Release the parsed rows: the index is the only thing read afterwards.
+        self._epss_cache = []
+        self._epss_loaded = True
 
     def _get_epss_from_api(self, cve_id: str) -> float | None:
         """Query the FIRST EPSS API directly."""
@@ -298,10 +365,12 @@ class CVEOrgClient:
             Tuple of (is_kev, kev_record_or_none).
         """
         kevs = self.load_kev()
-        for kev in kevs:
-            if kev.get("cveID", "").upper() == cve_id.upper():
-                return True, kev
-        return False, None
+        if self._kev_index is None:
+            self._kev_index = {
+                str(k.get("cveID", "")).upper(): k for k in kevs if k.get("cveID")
+            }
+        record = self._kev_index.get(cve_id.upper())
+        return (True, record) if record is not None else (False, None)
 
     def get_ransomware_usage(self, cve_id: str) -> str:
         """Check if a CVE is known to be used in ransomware campaigns.

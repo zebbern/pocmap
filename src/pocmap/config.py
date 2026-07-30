@@ -37,14 +37,32 @@ DEFAULT_CACHE_MAX_MB: Final[int] = 200  # total on-disk cap before LRU eviction
 # Per-repo cap for fetched PoC source. Applied to the download *and* the
 # extracted bytes: a small tar.gz can expand to gigabytes, so the extraction
 # side is the one that actually stops a decompression bomb.
-DEFAULT_POC_SOURCE_MAX_MB: Final[int] = 20
-DEFAULT_POC_SOURCE_TOTAL_MAX_MB: Final[int] = 500
+#
+# 100 MB, not 20: real PoC repos routinely bundle a JRE, a vulnerable target
+# app or a packet capture. kozmer/log4j-shell-poc (1851 stars, the canonical
+# Log4Shell PoC) is 38.5 MB and was rejected outright under the old cap, which
+# made the flagship case for verify_github_pocs fail. The cap exists to stop a
+# decompression bomb, not to second-guess repo size.
+DEFAULT_POC_SOURCE_MAX_MB: Final[int] = 100
+# Kept at 10x the per-repo cap: a default verify run fetches 5 repos, so a
+# total equal to 5x would saturate on one run and evict trees it is about to
+# re-fetch on the next.
+DEFAULT_POC_SOURCE_TOTAL_MAX_MB: Final[int] = 1000
 
 # API endpoint URLs
 NVD_API_BASE: Final[str] = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 # The CPE *dictionary* — maps a product name to the canonical vendor:product
 # pairs NVD files CVEs under. Distinct from NVD_API_BASE, which serves CVEs.
 NVD_CPE_API_BASE: Final[str] = "https://services.nvd.nist.gov/rest/json/cpes/2.0"
+
+# OSV.dev — vulnerabilities keyed by *package* (PyPI, npm, Maven, Go, distro
+# packages, ...) rather than by CPE product. Complements the NVD path rather
+# than replacing it: OSV cannot answer "is nginx 1.20.1 vulnerable" (it rejects
+# a bare product name outright), but it is the only source here that answers
+# "which release fixes this" for a dependency. Needs no API key.
+OSV_API_BASE: Final[str] = "https://api.osv.dev/v1"
+OSV_QUERY_URL: Final[str] = f"{OSV_API_BASE}/query"
+OSV_VULN_URL: Final[str] = f"{OSV_API_BASE}/vulns"
 
 # CVE -> MITRE ATT&CK technique mappings, curated by the Center for Threat-Informed
 # Defense over the CISA KEV catalogue. Expert-reviewed rather than inferred: the
@@ -73,10 +91,11 @@ CVE_ORG_GIT_RAW: Final[str] = (
 CISA_KEV_URL: Final[str] = (
     "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 )
-EPSS_CSV_URL: Final[str] = (
-    "https://raw.githubusercontent.com/zebbern/pocmap/refs/heads/main"
-    "/epss_scores-current.csv"
-)
+# FIRST's official EPSS bulk feed (gzipped CSV, ~354k rows, refreshed daily).
+# The previous value pointed at a file in this repo that does not exist, so the
+# bulk path 404'd on every run and every EPSS lookup silently fell back to the
+# per-CVE FIRST API — one HTTP request per CVE. Scoring is now one download.
+EPSS_CSV_URL: Final[str] = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 EPSS_API_URL: Final[str] = "https://api.first.org/data/v1/epss"
 SHODAN_CVEDB_URL: Final[str] = "https://cvedb.shodan.io/cve"
 GITHUB_API_BASE: Final[str] = "https://api.github.com"

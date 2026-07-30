@@ -18,13 +18,16 @@ Example::
 
 from __future__ import annotations
 
+import gzip
+import io
 import ipaddress
 import json
 import logging
 import socket
 import threading
 import urllib.parse
-from collections.abc import Callable
+import zlib
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal, TypeVar
@@ -394,6 +397,46 @@ def _is_rate_limited(resp: requests.Response) -> bool:
     return False
 
 
+# Ceiling on a decompressed text body. The largest legitimate feed pocmap reads
+# is the EPSS catalogue at ~13 MB decompressed, so this leaves ample headroom
+# while keeping a decompression bomb from exhausting memory.
+_MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024
+
+
+def _decode_text_body(resp: requests.Response) -> str:
+    """Return *resp*'s body as text, transparently gunzipping a ``.gz`` payload.
+
+    ``requests`` only auto-decompresses when the server sets
+    ``Content-Encoding: gzip``. A gzip *file* served as ``application/gzip`` —
+    which is how the EPSS bulk feed ships — arrives as raw deflate bytes, and
+    ``resp.text`` would then be mojibake that gets cached as if it were valid.
+    Detect the gzip magic on the raw body instead of trusting headers.
+
+    Falls back to ``resp.text`` whenever the body is not gzip-framed or the
+    stream is truncated, so this can never make a working feed fail.
+    """
+    raw = resp.content
+    if raw[:2] != b"\x1f\x8b":
+        return resp.text
+    try:
+        # Decompress incrementally against a cap rather than calling
+        # gzip.decompress(), which is unbounded: a few KB of crafted deflate
+        # expands to gigabytes and would exhaust memory before any size check.
+        with gzip.GzipFile(fileobj=io.BytesIO(raw)) as stream:
+            data = stream.read(_MAX_DECOMPRESSED_BYTES + 1)
+            if len(data) > _MAX_DECOMPRESSED_BYTES:
+                logger.warning(
+                    "Gzipped body of %s exceeds the %d MB decompression cap; using it raw",
+                    resp.url,
+                    _MAX_DECOMPRESSED_BYTES // (1024 * 1024),
+                )
+                return resp.text
+        return data.decode(resp.encoding or "utf-8", errors="replace")
+    except (OSError, EOFError, zlib.error):
+        logger.warning("Body of %s looked gzipped but did not decompress", resp.url)
+        return resp.text
+
+
 @dataclass(frozen=True)
 class SourceStatus:
     """Health record for a single source, produced while aggregating a lookup.
@@ -472,6 +515,9 @@ class HTTPClient:
         max_retries: Maximum retry attempts for failed requests.
         backoff_factor: Exponential backoff multiplier.
         pool_connections: Connection pool size.
+        retry_methods: HTTP methods eligible for automatic retry. Defaults to
+            ``("HEAD", "GET", "OPTIONS")``; pass a sequence including ``"POST"``
+            only when the POST is idempotent (a lookup, not a notification).
 
     Example::
 
@@ -487,6 +533,7 @@ class HTTPClient:
         backoff_factor: float | None = None,
         pool_connections: int = 10,
         offline: bool | None = None,
+        retry_methods: Sequence[str] | None = None,
     ) -> None:
         self.headers = headers or settings.default_headers
         self.timeout = timeout or settings.http_timeout
@@ -497,11 +544,16 @@ class HTTPClient:
         # on); an explicit bool forces offline on/off for just this client.
         self._offline_override = offline
 
+        # POST is excluded by default *on purpose*: the only POST in the default
+        # client is an outbound webhook notification, and an automatic retry
+        # would re-send it. A caller whose POST is a pure lookup (OSV's query
+        # endpoint) opts in via ``retry_methods`` rather than widening this for
+        # everyone.
         retry_strategy = Retry(
             total=self.max_retries,
             backoff_factor=self.backoff_factor,
             status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "OPTIONS"],
+            allowed_methods=list(retry_methods or ("HEAD", "GET", "OPTIONS")),
             raise_on_status=False,
         )
 
@@ -789,10 +841,119 @@ class HTTPClient:
         resp = self.get(url, headers=headers, params=params, timeout=timeout, **kwargs)
         if resp.status_code == 404:
             return default
-        text = resp.text
+        text = _decode_text_body(resp)
         if cache_key is not None and resp.status_code == 200:
             cache.set(cache_key, text, status=resp.status_code)
         return text
+
+    def post_json_cached(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str] | None = None,
+        default: Any = None,
+        timeout: int | None = None,
+        no_cache: bool = False,
+    ) -> Any:
+        """POST a JSON body, parse the JSON reply, and cache it like a GET.
+
+        For an API whose *query* lives in the request body rather than the URL —
+        OSV's ``/v1/query`` — a POST is semantically a read. This gives it the
+        same guarantees every GET already has and which :meth:`post_json`
+        deliberately lacks (it exists for webhook delivery):
+
+        * **Persistent cache**, keyed on ``(POST, url, body)``.
+        * **Offline mode** — served from cache, and a miss raises
+          :class:`OfflineError` instead of quietly hitting the network.
+        * **Throttle detection** — a surviving 429 raises :class:`RateLimitError`
+          rather than degrading into an empty result.
+        * **SSRF validation** and ``allow_redirects=False``, so a 3xx cannot
+          bounce the body to an internal host.
+
+        Args:
+            url: Target URL.
+            payload: JSON-serializable request body.
+            headers: Additional headers merged with defaults.
+            default: Value returned when the reply is 404 or not valid JSON.
+            timeout: Per-request timeout override.
+            no_cache: Bypass the cache entirely (no read, no write).
+
+        Returns:
+            Parsed JSON, or *default*.
+
+        Raises:
+            OfflineError: Offline mode with no cached response.
+            RateLimitError: Upstream throttled the request.
+            HTTPError: The URL is unsafe or the request failed.
+        """
+        cache = _get_cache()
+        offline = self._is_offline()
+        cache_key: str | None = None
+        if cache.enabled and not no_cache:
+            cache_key = HTTPCache.make_key("POST", url, body=payload)
+            cached_body = (
+                cache.peek(cache_key, allow_stale=True) if offline else cache.get(cache_key)
+            )
+            if cached_body is not None:
+                try:
+                    return json.loads(cached_body)
+                except (ValueError, TypeError):
+                    logger.warning("Discarding corrupt cached JSON for %s", url)
+        if offline:
+            raise OfflineError(f"offline: no cached response for {url}", url=url)
+
+        merged_headers = {**self.headers, **(headers or {}), "Content-Type": "application/json"}
+        request_timeout = timeout if timeout is not None else self.timeout
+        self._assert_url_safe(url)
+        try:
+            with self._lock:
+                resp = self._session.post(
+                    url,
+                    json=payload,
+                    headers=merged_headers,
+                    timeout=request_timeout,
+                    allow_redirects=False,
+                )
+        except requests.RequestException as exc:
+            logger.error("POST %s failed: %s", url, exc)
+            raise HTTPError(str(exc), url=url) from exc
+
+        logger.debug("POST %s -> %d", url, resp.status_code)
+        if _is_rate_limited(resp):
+            raise RateLimitError(
+                f"Rate limited by upstream (HTTP {resp.status_code})",
+                status_code=resp.status_code,
+                url=url,
+            )
+        if resp.status_code == 404:
+            return default
+        if not 200 <= resp.status_code < 300:
+            # Anything that is not a success is an error, including a 3xx:
+            # redirects are not followed here, so a 302 would otherwise fall
+            # through to a failed JSON parse and return ``default``. An error
+            # body is also still valid JSON, so parsing it blindly would hand
+            # the caller ``{"code": 3, "message": "invalid ecosystem"}``. Both
+            # paths let a failed *request* read as an empty *result*.
+            detail = resp.text.strip()[:200]
+            raise HTTPError(
+                f"HTTP {resp.status_code} from {url}: {detail}",
+                status_code=resp.status_code,
+                url=url,
+            )
+        try:
+            data = resp.json()
+        except (ValueError, TypeError) as exc:
+            # A success status with an unparseable body means something is
+            # intercepting or mangling the response (a captive portal, a proxy
+            # error page). Never silently return "nothing found" for that.
+            raise HTTPError(
+                f"Unparseable JSON from {url} (HTTP {resp.status_code})",
+                status_code=resp.status_code,
+                url=url,
+            ) from exc
+        if cache_key is not None and resp.status_code == 200:
+            cache.set(cache_key, resp.text, status=resp.status_code)
+        return data
 
     def close(self) -> None:
         """Close the underlying session and release connections."""

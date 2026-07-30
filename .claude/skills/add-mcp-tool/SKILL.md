@@ -74,7 +74,7 @@ def my_thing(cve_id: str, limit: int = 10) -> str:
         return _format_error_json(e, f"my_thing({cve_id})")
 ```
 
-Non-negotiable conventions (verified across the existing 19 tools):
+Non-negotiable conventions (verified across the existing 22 tools):
 - The function **returns a JSON `str`**, never a dict/object.
 - Normalize inputs: `cve_id.upper().strip()`.
 - Serialize with `json.dumps(..., default=str)` (handles enums/dates/Paths).
@@ -86,7 +86,7 @@ Update **all** of these so the tool count and contract stay truthful:
 - `mcp_config.json` (repo root) — add the tool to the catalog.
 - `AGENTS.md` (repo root) — add it to the tool tables.
 - `.claude/skills/pocmap-agent/references/mcp_tools.md` — add a full entry and a
-  row in the Quick Lookup Table; bump the "19 tools" counts (here and in
+  row in the Quick Lookup Table; bump the "22 tools" counts (here and in
   `SKILL.md`) if the total changed.
 
 ## 5. Verify

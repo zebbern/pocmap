@@ -1,6 +1,6 @@
 # PocMap MCP Tools Reference
 
-All 21 MCP tools for vulnerability research, exploit discovery, and report generation.
+All 22 MCP tools for vulnerability research, exploit discovery, and report generation.
 
 **Start the server:** `uvx --from pocmap[server] pocmap-mcp` (or installed `pocmap-mcp` /
 `python -m pocmap.mcp_server`). Implementation: `src/pocmap/mcp_server.py`.
@@ -359,6 +359,38 @@ parameters), and `cves` (list of **RecentExploitResult**). There is no `results`
 > `min_epss` likewise uses the 0-100 scale (e.g. `50` = EPSS >= 50%), while
 > `get_epss_score` returns 0.0-1.0. On failure the tool returns
 > `{"success": false, "error": ...}`.
+### discover_package_cves
+**Purpose**: Find vulnerabilities in a software **package** (a dependency) and the exact releases that fix them.
+**When to use**: Any question about a library, lockfile or SBOM entry — `requirements.txt`, `package.json`, `pom.xml`, `go.mod`, `Gemfile`, `Cargo.toml` — or "what should I upgrade to". This is the ONLY tool that returns fixed versions. It CANNOT answer questions about deployed products (nginx, Confluence, FortiOS): use `discover_product_cves` for those.
+**Parameters**:
+- `ecosystem` (str, required): `PyPI`, `npm`, `Go`, `Maven`, `crates.io`, `RubyGems`, `Packagist`, `NuGet`, `Hex`, `Pub`, or a distro (`Debian:12`, `Ubuntu:22.04`, `Alpine:v3.19`, `Red Hat`, `Bitnami`). Case-insensitive; normalized for you.
+- `name` (str, required): Package name. Maven needs the full `groupId:artifactId` — a bare artifact matches nothing and looks falsely clean.
+- `version` (str, default `""`): Installed version. Strongly recommended.
+- `limit` (int, default `50`, max 500): Maximum advisories.
+**Returns**: JSON with `ecosystem`, `package`, `version`, `total_found` (found, before `limit`), `returned`, `truncated`, `fixable_count`, `unfixed_count`, `search_sources` (only feeds that produced data), and `vulnerabilities` — ranked **CISA KEV > EPSS > CVSS**, each with `id`, `cve_ids`, `aliases`, `summary`, `severity`, `cvss_score` (0-10), `cvss_vector`, `epss_score` (**0.0-1.0**), `kev_status`, `fixed_versions`, `introduced_versions`, `has_fix`, `withdrawn`, `published`, `url`.
+
+Four traps worth knowing:
+1. `fixed_versions` usually lists SEVERAL releases — maintainers backport to every
+   supported branch. Recommend the one on the user's own major version.
+2. An empty list is NOT proof of safety: OSV returns the same empty body for an unknown
+   package as for a clean one. Check the spelling first.
+3. `fixed_versions: []` means no fix is published — the user needs a workaround, not an
+   upgrade. Say so explicitly.
+4. `cvss_score` is `null` for a CVSS 4.0-only advisory (pocmap does not score 4.0);
+   `severity` still carries the publisher's rating.
+
+**Example**:
+```json
+{"ecosystem": "Maven", "package": "org.apache.logging.log4j:log4j-core",
+ "version": "2.14.1", "total_found": 7, "fixable_count": 7, "unfixed_count": 0,
+ "search_sources": ["osv", "epss", "cisa_kev"],
+ "vulnerabilities": [
+   {"id": "GHSA-jfh8-c2jp-5v3q", "cve_ids": ["CVE-2021-44228"],
+    "severity": "CRITICAL", "cvss_score": 10.0, "epss_score": 0.9999,
+    "kev_status": true, "fixed_versions": ["2.15.0", "2.3.1", "2.12.2"],
+    "has_fix": true, "url": "https://osv.dev/vulnerability/GHSA-jfh8-c2jp-5v3q"}]}
+```
+
 ### discover_product_cves
 **Purpose**: Discover CVEs affecting a specific product and version.
 **When to use**: When assessing a product's vulnerability landscape. Supports aliases (e.g., `"struts"` -> `"Apache Struts"`).

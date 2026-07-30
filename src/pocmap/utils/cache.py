@@ -107,13 +107,25 @@ class HTTPCache:
         method: str,
         url: str,
         params: Mapping[str, Any] | None = None,
+        body: Mapping[str, Any] | None = None,
     ) -> str:
-        """Return a stable SHA-256 hex key for ``(method, url, sorted-params)``."""
-        payload = {
+        """Return a stable SHA-256 hex key for ``(method, url, sorted-params[, body])``.
+
+        *body* keys a request whose identity lives in its payload rather than its
+        URL — an OSV ``POST /v1/query`` is a pure lookup, so it caches like a GET.
+        It is folded in **only when supplied**, so keys for the GET callers that
+        predate it stay byte-identical and an upgrade does not silently
+        invalidate every entry already on disk.
+        """
+        payload: dict[str, Any] = {
             "method": method.upper(),
             "url": url,
             "params": _normalize_params(params),
         }
+        if body is not None:
+            # json.dumps(sort_keys=True) orders nested keys too, so a payload
+            # built in a different order still hashes to the same key.
+            payload["body"] = body
         raw = json.dumps(payload, sort_keys=True, default=str)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

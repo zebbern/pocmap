@@ -1,5 +1,5 @@
 {
-  "_comment": "Claude Desktop / MCP client config for the PocMap MCP server (19 tools, 3 resources, 3 prompts). Merge the 'mcpServers' block into your client's config file. The '_comment'/'_instructions' keys are ignored by the client and exist only as documentation.",
+  "_comment": "Claude Desktop / MCP client config for the PocMap MCP server (22 tools, 3 resources, 3 prompts). Merge the 'mcpServers' block into your client's config file. The '_comment'/'_instructions' keys are ignored by the client and exist only as documentation.",
   "_instructions": [
     "1. Preferred: uvx (requires uv on PATH). No local clone — installs pocmap[server] from PyPI and runs pocmap-mcp.",
     "2. Alternate (already installed): command pocmap-mcp with args [].",

@@ -6,6 +6,7 @@ Each client encapsulates interaction with a specific external service:
     - GitHub API for PoC repositories
     - CVE.org for canonical CVE records
     - ExploitDB, Metasploit, and Nuclei for exploit code
+    - OSV.dev for package-ecosystem vulnerabilities and their fixed versions
 """
 
 from pocmap.clients.attack_client import ATTACKClient
@@ -14,6 +15,7 @@ from pocmap.clients.cveorg_client import CVEOrgClient
 from pocmap.clients.exploit_client import ExploitDBClient, MetasploitClient, NucleiClient
 from pocmap.clients.github_client import GitHubClient
 from pocmap.clients.nvd_client import NVDClient
+from pocmap.clients.osv_client import OSVClient
 
 __all__ = [
     "NVDClient",
@@ -24,4 +26,5 @@ __all__ = [
     "ExploitDBClient",
     "MetasploitClient",
     "NucleiClient",
+    "OSVClient",
 ]

@@ -1,6 +1,6 @@
 # PocMap CLI Commands
 
-Verified against `src/pocmap/cli.py`. There are **12 commands** (11 top-level plus the
+Verified against `src/pocmap/cli.py`. There are **13 commands** (12 top-level plus the
 `cache` sub-app with `info`/`clear`). Each takes a positional argument or options as
 shown. `python -m pocmap --help` is authoritative.
 
@@ -69,6 +69,32 @@ Results are grouped into confirmed / possibly-affected / not-enough-data.
 
 ```bash
 pocmap discover "Apache Struts" --version 2.x
+```
+
+## `pocmap package <ecosystem> <name>`
+Find vulnerabilities in a **dependency** and the releases that fix them (OSV.dev; no API
+key, not bound by NVD rate limits). Use for lockfiles/SBOMs. This is the only command that
+returns fixed versions; it cannot answer questions about deployed products like nginx or
+Confluence — use `pocmap discover` for those.
+
+| Flag | Description |
+|------|-------------|
+| `-v`, `--version <ver>` | Installed version, e.g. `3.2.0`. Strongly recommended — OSV then returns only advisories that actually apply |
+| `--fixable-only` | Only advisories with a published fix (applied after ranking + `--limit`) |
+| `--limit <n>` | Max advisories (default 100, max 1000), taken from the top of the risk ranking |
+| `-o`, `--output <file>` | Save JSON report to file |
+| `-f`, `--format <table\|json\|csv\|md\|sarif>` | Output format (default `table`) |
+| `-q`, `--quiet` | Suppress decorative output |
+
+Ecosystems are case-insensitive here and normalized (`pypi` -> `PyPI`, `debian:12` ->
+`Debian:12`). Maven needs the full `groupId:artifactId`. Ranked CISA KEV > EPSS > CVSS.
+An empty result is *not* proof of safety — OSV returns the same empty body for an unknown
+package as for a clean one.
+
+```bash
+pocmap package PyPI django --version 3.2.0
+pocmap package Maven org.apache.logging.log4j:log4j-core --version 2.14.1
+pocmap package npm lodash --version 4.17.20 --format sarif
 ```
 
 ## `pocmap bulk <file>`

@@ -56,7 +56,6 @@ CODELOAD_BASE = "https://codeload.github.com"
 # a URL path: without this, ``owner="a/../../evil"`` would redirect the fetch.
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 
-# Default branch varies by repo and codeload has no "default branch" alias.
 # Refs to try, in order. ``HEAD`` resolves whatever the repository's default
 # branch actually is, so it covers the ones that use neither convention —
 # Karmakstylez/CVE-2024-6387 defaults to "production" and was unreachable
@@ -85,6 +84,17 @@ _BYTES_PER_MB = 1024 * 1024
 
 class PoCSourceDisabledError(RuntimeError):
     """Raised when fetching is attempted without the operator opting in."""
+
+
+class ArchiveTooLargeError(HTTPError):
+    """Raised when a repository exceeds the configured per-repo size cap.
+
+    Distinct from a generic :class:`HTTPError` because the two mean opposite
+    things to the branch-retry loop: a 404 means "try the next ref", while this
+    means "the ref resolved fine and the content is too big" — retrying other
+    refs just re-downloads the same oversized archive and then reports
+    "could not fetch from any of (...)", which points at the wrong cause.
+    """
 
 
 @dataclass(frozen=True)
@@ -216,6 +226,11 @@ class CodeloadClient:
             url = f"{CODELOAD_BASE}/{owner}/{repo}/tar.gz/{ref}"
             try:
                 blob = self._download(url, max_bytes)
+            except ArchiveTooLargeError:
+                # The ref resolved; the content is simply too big. Trying the
+                # remaining refs would re-download the same archive and then
+                # report "could not fetch", blaming the wrong thing.
+                raise
             except HTTPError as exc:
                 last_error = exc
                 continue
@@ -267,8 +282,10 @@ class CodeloadClient:
             buf.extend(chunk)
             if len(buf) > max_bytes:
                 resp.close()
-                raise HTTPError(
-                    f"Archive exceeds {max_bytes // _BYTES_PER_MB} MB cap: {url}"
+                cap = max_bytes // _BYTES_PER_MB
+                raise ArchiveTooLargeError(
+                    f"Archive exceeds the {cap} MB per-repo cap: {url}. "
+                    "Raise POCMAP_POC_SOURCE_MAX_MB to fetch it."
                 )
         return bytes(buf)
 
@@ -308,8 +325,10 @@ class CodeloadClient:
                     # both the per-repo and total budgets unenforced.
                     written += max(member.size, _MIN_ENTRY_COST) if member.isfile() else _MIN_ENTRY_COST
                     if written > max_bytes:
-                        raise HTTPError(
-                            f"Archive expands beyond {max_bytes // _BYTES_PER_MB} MB cap"
+                        cap = max_bytes // _BYTES_PER_MB
+                        raise ArchiveTooLargeError(
+                            f"Archive expands beyond the {cap} MB per-repo cap. "
+                            "Raise POCMAP_POC_SOURCE_MAX_MB to fetch it."
                         )
                     # Strip archive-supplied permissions and ownership. The
                     # ``data`` filter does this itself, but the fallback path on

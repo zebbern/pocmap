@@ -49,11 +49,12 @@ from pocmap.config import (
     nvd_api_key_looks_valid,
     settings,
 )
-from pocmap.models import CVEInfo, export_schemas
+from pocmap.models import CVEInfo, PackageVulnerability, export_schemas
 from pocmap.services.bb_service import BugBountyService
 from pocmap.services.cve_service import CVEService
 from pocmap.services.exploit_service import ExploitService
 from pocmap.services.lab_service import LabService
+from pocmap.services.package_service import PackageService
 from pocmap.services.product_service import ProductDiscoveryService
 from pocmap.services.recent_service import RecentService
 from pocmap.services.report_service import ReportService
@@ -69,6 +70,7 @@ from pocmap.services.snapshot import (
 from pocmap.utils.cache import HTTPCache
 from pocmap.utils.exit_codes import ExitCode
 from pocmap.utils.formatters import (
+    _SEVERITY_COLORS,
     format_bb_table,
     format_cve_table,
     format_exploit_table,
@@ -1741,6 +1743,247 @@ def discover(
         items=_notable_cve_items(disc_all_cves),
         is_quiet=is_quiet,
     )
+    if is_empty:
+        raise typer.Exit(ExitCode.NO_RESULTS)
+
+
+def _package_vuln_row(vuln: PackageVulnerability, *, ecosystem: str, package: str) -> dict[str, object]:
+    """Flatten a :class:`PackageVulnerability` into a CSV/Markdown row."""
+    return {
+        "id": vuln.id,
+        "ecosystem": ecosystem,
+        "package": package,
+        "cve_ids": ",".join(vuln.cve_ids),
+        "severity": vuln.severity.value,
+        "cvss_score": vuln.cvss_score,
+        "epss": vuln.epss,
+        "kev_status": vuln.kev_status,
+        # Joined rather than left as a list: a bare list renders as JSON in a
+        # spreadsheet cell, and "upgrade to one of these" is the whole point.
+        "fixed_versions": ", ".join(vuln.fixed_versions),
+        "summary": vuln.summary,
+        "url": vuln.url,
+    }
+
+
+def _package_sarif_dict(vuln: PackageVulnerability, *, ecosystem: str, package: str) -> dict[str, object]:
+    """Map a package advisory onto the dict the SARIF renderer expects.
+
+    Keyed on the CVE when the advisory has one so findings correlate with the
+    rest of pocmap's SARIF output, and on the OSV id otherwise. ``help_uri``
+    points at OSV for a non-CVE advisory, which has no NVD page.
+    """
+    ident = vuln.cve_ids[0] if vuln.cve_ids else vuln.id
+    fix = (
+        f" Fixed in {', '.join(vuln.fixed_versions)}."
+        if vuln.fixed_versions
+        else " No fixed version published."
+    )
+    return {
+        "id": ident,
+        "description": f"{ecosystem}/{package}: {vuln.summary or vuln.id}.{fix}",
+        "cvss": {"base_score": vuln.cvss_score, "severity": vuln.severity.value},
+        "epss": vuln.epss,
+        "kev_status": vuln.kev_status,
+        "exploit_count": None,
+        "cwes": [],
+        "help_uri": (
+            f"https://nvd.nist.gov/vuln/detail/{ident}"
+            if ident.startswith("CVE-")
+            else vuln.url
+        ),
+    }
+
+
+@app.command()
+def package(
+    ctx: typer.Context,
+    ecosystem: Annotated[str, typer.Argument(help="Package ecosystem (PyPI, npm, Go, Maven, crates.io, Debian:12, ...)")],
+    name: Annotated[str, typer.Argument(help="Package name (Maven needs 'groupId:artifactId')")],
+    version: Annotated[str | None, typer.Option("--version", "-v", help="Installed version, e.g. 3.2.0")] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Max advisories to return", min=1, max=1000)] = 100,
+    fixable_only: Annotated[bool, typer.Option("--fixable-only", help="Only advisories with a published fix")] = False,
+    output: Annotated[str | None, typer.Option("--output", "-o", help="Save JSON report to file")] = None,
+    output_format: Annotated[
+        OutputFormat | None,
+        typer.Option("--format", "-f", help="Output format: table (default), json, csv, md, sarif"),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress decorative output"),
+    ] = False,
+) -> None:
+    """Find vulnerabilities in a package and the releases that fix them.
+
+    Answers the dependency question: given a package and the version you ship,
+    what is wrong with it and what do you upgrade to. Data comes from OSV.dev
+    (no API key, no NVD rate limit), ranked by CISA KEV then EPSS then CVSS so
+    the top of the list is what is actually being exploited.
+
+    Ecosystem names are case-insensitive here and normalized to OSV's
+    case-sensitive spelling ('pypi' -> 'PyPI', 'debian:12' -> 'Debian:12').
+
+    Passing --version is strongly preferred: OSV then evaluates its own affected
+    ranges and returns only what genuinely applies to that release.
+    """
+    fmt, is_quiet = _resolve_output(ctx, output_format, quiet)
+
+    # Validate the destination up front. Checking it after rendering would leave
+    # a complete JSON/SARIF document on stdout and *then* fail, so a consumer
+    # sees a successful-looking stream from a run that exited non-zero.
+    if output:
+        try:
+            _safe_path(output)
+        except ValueError as exc:
+            _emit_cli_error(exc, fmt=fmt, category="invalid_input")
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
+
+    show_progress = fmt is OutputFormat.TABLE and not is_quiet
+    progress_cm: Progress | nullcontext[None] = (
+        Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        )
+        if show_progress
+        else nullcontext()
+    )
+    with PackageService() as service, progress_cm as progress:
+        if progress is not None:
+            progress.add_task(
+                f"[bright_blue]Checking {ecosystem}/{name}...[/bright_blue]", total=None
+            )
+        try:
+            result = service.discover_package(
+                ecosystem=ecosystem,
+                package=name,
+                version=version,
+                limit=limit,
+            )
+        except OfflineError as exc:
+            raise _offline_exit(exc, fmt=fmt) from exc
+        except ValueError as exc:
+            # Covers both a blank argument and OSV rejecting the query itself
+            # (ValidationError subclasses ValueError) — e.g. an unknown
+            # ecosystem, which must not read as "no vulnerabilities".
+            _emit_cli_error(exc, fmt=fmt, category="invalid_input")
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
+        except Exception as exc:
+            # Route through _emit_cli_error so --format json emits a parseable
+            # error envelope instead of a Rich line on stdout: a consumer that
+            # only checks for output would otherwise see a truncated stream and
+            # lose the reason entirely.
+            _emit_cli_error(exc, fmt=fmt, category="upstream_error")
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
+
+    vulns = [v for v in result.vulnerabilities if v.has_fix] if fixable_only else result.vulnerabilities
+    is_empty = not vulns
+    # "nothing after filtering" is not "nothing found" — saying the package is
+    # clean because --fixable-only removed every unfixable advisory would be the
+    # exact opposite of the truth.
+    filtered_out = len(result.vulnerabilities) - len(vulns)
+
+    report_data: dict[str, object] = {
+        "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
+        "ecosystem": result.ecosystem,
+        "package": result.package,
+        "version": result.version,
+        "total_found": result.total_found,
+        "returned": len(vulns),
+        "truncated": result.truncated,
+        "fixable_only": fixable_only,
+        "filtered_out": filtered_out,
+        "fixable_count": sum(1 for v in vulns if v.has_fix),
+        "unfixed_count": sum(1 for v in vulns if not v.has_fix),
+        "search_sources": result.search_sources,
+        "vulnerabilities": [v.model_dump(mode="json") for v in vulns],
+    }
+
+    def _write_output_file() -> None:
+        """Persist ``report_data`` to ``--output`` (path validated up front)."""
+        if not output:
+            return
+        import json as _json
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(_json.dumps(report_data, indent=2, default=str), encoding="utf-8")
+        if fmt is OutputFormat.TABLE and not is_quiet:
+            rprint(f"\n[green1]Report saved to {output_path}[/green1]")
+
+    if fmt is not OutputFormat.TABLE:
+        if fmt is OutputFormat.SARIF:
+            render(
+                [
+                    _package_sarif_dict(v, ecosystem=result.ecosystem, package=result.package)
+                    for v in vulns
+                ],
+                fmt,
+                console=console,
+            )
+        elif fmt is OutputFormat.JSON:
+            render(report_data, fmt, console=console)
+        else:  # csv / md
+            render(
+                [
+                    _package_vuln_row(v, ecosystem=result.ecosystem, package=result.package)
+                    for v in vulns
+                ],
+                fmt,
+                console=console,
+                title=f"{result.ecosystem}/{result.package}",
+            )
+        _write_output_file()
+        raise typer.Exit(ExitCode.NO_RESULTS if is_empty else ExitCode.OK)
+
+    # Table rendering.
+    coordinate = f"{result.ecosystem}/{result.package}"
+    if result.version:
+        coordinate += f"@{result.version}"
+    rprint(f"\n[bold]Package Vulnerabilities: {coordinate}[/bold]")
+    if not result.version:
+        rprint("[dim]No --version given: showing every advisory ever filed against this package.[/dim]")
+    shown = (
+        f"showing {len(vulns)} of {result.total_found}"
+        if result.truncated
+        else f"Found {result.total_found}"
+    )
+    rprint(
+        f"[dim]{shown} | with a fix: {sum(1 for v in vulns if v.has_fix)}"
+        f" | no fix published: {sum(1 for v in vulns if not v.has_fix)}[/dim]"
+    )
+
+    if is_empty and filtered_out:
+        # Never say "no known vulnerabilities" when --fixable-only is what
+        # emptied the list — that inverts the finding.
+        rprint(
+            f"\n[yellow]No advisories with a published fix[/yellow]"
+            f"[dim] — {filtered_out} found, none with a fix. "
+            f"Drop --fixable-only to see them.[/dim]"
+        )
+    elif is_empty:
+        rprint("\n[green1]No known vulnerabilities[/green1]")
+        rprint("[dim]OSV cannot distinguish this from an unknown package.[/dim]")
+    else:
+        table = Table(show_header=True, header_style="bold bright_blue", box=None, pad_edge=False)
+        table.add_column("Severity", no_wrap=True)
+        table.add_column("CVSS", justify="right", no_wrap=True)
+        table.add_column("EPSS", justify="right", no_wrap=True)
+        table.add_column("KEV", no_wrap=True)
+        table.add_column("Advisory", no_wrap=True)
+        table.add_column("Fixed in")
+        for vuln in vulns:
+            style = _SEVERITY_COLORS.get(vuln.severity.value, "white")
+            table.add_row(
+                f"[{style}]{vuln.severity.value}[/{style}]",
+                f"{vuln.cvss_score:.1f}" if vuln.cvss_score is not None else "-",
+                _fmt_epss(vuln.epss),
+                "[red3]yes[/red3]" if vuln.kev_status else "",
+                vuln.cve_ids[0] if vuln.cve_ids else vuln.id,
+                ", ".join(vuln.fixed_versions) or "[yellow]none published[/yellow]",
+            )
+        console.print(table)
+
+    _write_output_file()
     if is_empty:
         raise typer.Exit(ExitCode.NO_RESULTS)
 

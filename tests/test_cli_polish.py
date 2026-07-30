@@ -4,7 +4,7 @@ Covers two Phase-3 roadmap items, both fully offline via :class:`CliRunner`:
 
   * ``COMPLETION`` — Typer shell completion is enabled (``add_completion=True``),
     so ``--show-completion`` emits a non-empty script and the app still boots
-    with all 12 commands and its global callback options intact.
+    with all 13 commands and its global callback options intact.
   * ``PAGER-FIX`` — ``readme`` pages through the portable ``click.echo_via_pager``
     on every platform (Windows included) with a plain-write fallback on a
     non-TTY stream, and never shells out to ``less``. The URL guard and the
@@ -66,8 +66,8 @@ def _help_text(*argv: str) -> str:
     assert result.exit_code == 0, result.output
     return _ANSI_RE.sub("", result.output)
 
-# Every command that must appear in ``pocmap --help`` (11 @app.command() plus the
-# ``cache`` sub-Typer) — the roadmap's "12 commands" contract.
+# Every command that must appear in ``pocmap --help`` (12 @app.command() plus the
+# ``cache`` sub-Typer) — the roadmap's "13 commands" contract.
 EXPECTED_COMMANDS = [
     "lookup",
     "bulk",
@@ -78,6 +78,7 @@ EXPECTED_COMMANDS = [
     "readme",
     "schemas",
     "latest",
+    "package",
     "discover",
     "doctor",
     "cache",
@@ -108,11 +109,11 @@ def test_install_completion_option_exists() -> None:
 
 
 # ---------------------------------------------------------------------------
-# App still boots: 12 commands + global callback options intact
+# App still boots: 13 commands + global callback options intact
 # ---------------------------------------------------------------------------
 
 
-def test_help_lists_all_twelve_commands() -> None:
+def test_help_lists_all_thirteen_commands() -> None:
     text = _help_text("--help")
     for command in EXPECTED_COMMANDS:
         assert command in text, f"missing command in --help: {command}"
