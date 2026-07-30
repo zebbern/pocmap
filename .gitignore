@@ -36,3 +36,7 @@ schemas/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Local machine config, never part of the package
+ssh_config.json
+.cursor/
