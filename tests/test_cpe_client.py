@@ -90,6 +90,64 @@ def test_resolve_treats_vendor_prefixed_query_as_exact() -> None:
     assert client.resolve("Fortinet FortiOS") == [("fortinet", "fortios")]
 
 
+# ---------------------------------------------------------------------------
+# Edition variants — NVD files enterprise software under one product per edition
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "variant,query,cves_hidden",
+    [
+        ("confluence_server", "Confluence", 50),
+        ("confluence_data_center", "Confluence", 37),
+        ("nextcloud_server", "Nextcloud", 189),
+        ("bitbucket_server", "Bitbucket", 3),
+        ("redis_enterprise", "Redis", 0),
+    ],
+)
+def test_edition_variants_are_included(variant: str, query: str, cves_hidden: int) -> None:
+    """Matching only the bare product name is a false negative in a security tool.
+
+    "Confluence" resolved to ``atlassian:confluence`` alone — 19 CVEs, newest
+    2020 — while the editions carried the 2021-2023 RCEs. Measured across 34
+    products: 7 have edition variants, hiding 280 CVEs in total.
+    """
+    base = query.lower()
+    client = _client(
+        _products(
+            f"cpe:2.3:a:acme:{base}:1.0:*:*:*:*:*:*:*",
+            f"cpe:2.3:a:acme:{variant}:1.0:*:*:*:*:*:*:*",
+        )
+    )
+    assert ("acme", variant) in client.resolve(query)
+
+
+@pytest.mark.parametrize(
+    "neighbour,query",
+    [
+        ("kubernetes-client", "Kubernetes"),   # a client library
+        ("nginx_agent", "nginx"),              # a separate component
+        ("jira_core", "Jira"),                 # a separate component
+        ("nginx_ingress_controller", "nginx"),  # a different product
+        ("questions_for_confluence", "Confluence"),
+    ],
+)
+def test_components_are_not_treated_as_editions(neighbour: str, query: str) -> None:
+    """The edition list is narrow on purpose.
+
+    A looser suffix set swept these in during measurement. A false positive here
+    silently attributes another product's CVEs to this one, which is the same
+    class of error as the false negative it fixes.
+    """
+    base = query.lower()
+    client = _client(
+        _products(
+            f"cpe:2.3:a:acme:{base}:1.0:*:*:*:*:*:*:*",
+            f"cpe:2.3:a:other:{neighbour}:1.0:*:*:*:*:*:*:*",
+        )
+    )
+    assert client.resolve(query) == [("acme", base)]
+
+
 def test_resolve_falls_back_to_neighbours_when_nothing_matches_exactly() -> None:
     client = _client(_products("cpe:2.3:a:acme:widget_pro:1.0:*:*:*:*:*:*:*"))
     assert client.resolve("widget") == [("acme", "widget_pro")]

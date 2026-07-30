@@ -135,6 +135,11 @@ exploits the CVE;
 report the others as leads. It requires the operator to have set
 `POCMAP_ALLOW_FETCH_POC_SOURCE=1` (it writes exploit code to disk); if unset the tool
 returns an error saying so — surface that to the user instead of retrying.
+If the user insists they set it, the likely cause is that they used `export` in a shell:
+MCP clients launch the server with a filtered environment (only `HOME`, `LOGNAME`, `PATH`,
+`SHELL`, `TERM`, `USER`), so **no `POCMAP_*` variable set in a shell reaches the server**.
+Tell them to move it into their MCP client config's `env` block — the same place
+`GITHUB_API_TOKEN` and `NVD_API_KEY` go.
 
 ### Bug Bounty Research (1 tool)
 

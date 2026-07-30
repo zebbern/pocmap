@@ -126,6 +126,12 @@ Pick the right MCP tool or CLI command. **All MCP tool names below are exact.**
 - **Product aliases:** `discover_product_cves` / `ProductDiscoveryService` resolve
   aliases (e.g. `struts` → `Apache Struts`).
 
+> **Env vars and the MCP server.** MCP clients launch the server with a filtered
+> environment (only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`), so a
+> `POCMAP_*` / `GITHUB_API_TOKEN` / `NVD_API_KEY` value exported in a shell never
+> reaches it. For MCP use they must go in the client config's `env` block. Shell
+> exports do work for the CLI and the Python API.
+
 ## Error Handling (MCP tools)
 
 Every MCP tool returns a JSON **string**. On failure it contains an `error` key

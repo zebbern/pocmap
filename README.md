@@ -1,6 +1,6 @@
 # PocMap
 
-[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](https://github.com/zebbern/pocmap)
+[![Version](https://img.shields.io/badge/version-2.4.1-blue.svg)](https://github.com/zebbern/pocmap)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2-purple.svg)](https://docs.pydantic.dev/)
@@ -651,8 +651,31 @@ CVEs only counts against a repo that also ships essentially no code, so a multi-
 exploit toolkit is not mistaken for a list.
 
 ```bash
-export POCMAP_ALLOW_FETCH_POC_SOURCE=1
+export POCMAP_ALLOW_FETCH_POC_SOURCE=1     # CLI / Python API
 ```
+
+> **Using the MCP server? `export` will not work.** MCP clients launch the server with a
+> filtered environment — the stdio transport inherits only `HOME`, `LOGNAME`, `PATH`,
+> `SHELL`, `TERM` and `USER` — so **no `POCMAP_*` variable set in your shell reaches the
+> server**, and `verify_github_pocs` will keep returning `not_enabled`. Put it in your
+> client config's `env` block instead (this applies to `GITHUB_API_TOKEN` and
+> `NVD_API_KEY` too):
+>
+> ```json
+> {
+>   "mcpServers": {
+>     "pocmap": {
+>       "command": "uvx",
+>       "args": ["--from", "pocmap[server]", "pocmap-mcp"],
+>       "env": {
+>         "POCMAP_ALLOW_FETCH_POC_SOURCE": "1",
+>         "POCMAP_POC_SOURCE_DIR": "/home/you/.local/share/pocmap/poc-source",
+>         "GITHUB_API_TOKEN": "ghp_xxxxxxxxxxxx"
+>       }
+>     }
+>   }
+> }
+> ```
 
 **This is off by default and must be set deliberately.** It writes third-party exploit
 code to disk, which endpoint protection will often quarantine — run it on an isolated VM

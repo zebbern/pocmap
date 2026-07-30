@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-07-30
+
+Both fixes came out of using 2.4.0 as a user would, from PyPI, against products and CVEs
+not touched during development.
+
+### Fixed
+- **Product discovery missed edition variants — a false negative.** NVD files enterprise
+  software under a separate CPE product per edition, and resolution matched only the bare
+  name. `discover "Confluence"` returned 19 CVEs, newest **2020**, because
+  `atlassian:confluence_server` (50 CVEs) and `atlassian:confluence_data_center` (37)
+  were never queried — so the 2021-2023 Confluence RCEs were invisible and the answer
+  read as "you are patched". Nextcloud was worse: 189 CVEs sat under
+  `nextcloud:nextcloud_server`.
+
+  Measured across 34 real products rather than generalising from the one that surfaced
+  it: **7 have edition variants**, hiding ~280 CVEs in total. The suffix list is
+  deliberately narrow (`server`, `datacenter`, `cloud`, `enterprise`, `standard`,
+  `professional`, `community`) — a broader first draft also swept in
+  `redhat:kubernetes-client`, `f5:nginx_agent` and `atlassian:jira_core`, which are
+  separate components, not editions. A false positive here would silently attribute
+  another product's CVEs to this one, so widen the list only with evidence.
+- **Docs told users to `export` variables the MCP server never sees.** MCP clients launch
+  the server with a filtered environment — the stdio transport inherits only `HOME`,
+  `LOGNAME`, `PATH`, `SHELL`, `TERM` and `USER` — so no `POCMAP_*`, `GITHUB_API_TOKEN` or
+  `NVD_API_KEY` set in a shell reaches it. Following the README, `verify_github_pocs`
+  would keep returning `not_enabled` with no explanation. README, `AGENTS.md` and the
+  agent skill now say to use the client config's `env` block, and `AGENTS.md` tells
+  agents what to suggest when a user insists the flag is set.
+
 ## [2.4.0] - 2026-07-30
 
 ### Changed
