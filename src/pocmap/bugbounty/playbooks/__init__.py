@@ -11,10 +11,9 @@ Available Playbooks:
     - bb-submission-playbook.json: From finding to submission
 
 Usage:
-    import json
+    from pocmap.bugbounty.playbooks import load_playbook
 
-    with open("playbooks/cve-assessment-playbook.json") as f:
-        playbook = json.load(f)
+    playbook = load_playbook("cve-assessment")
 
     for phase in playbook["phases"]:
         print(f"Phase {phase['phase_id']}: {phase['name']}")
@@ -52,7 +51,7 @@ def load_playbook(name: str) -> dict[str, Any]:
     playbook_dir = Path(__file__).parent
     filepath = playbook_dir / f"{name}-playbook.json"
 
-    with open(filepath) as f:
+    with open(filepath, encoding="utf-8") as f:
         data: dict[str, Any] = json.load(f)
     return data
 
@@ -63,7 +62,7 @@ def list_playbooks() -> list[dict[str, str]]:
     playbooks = []
 
     for filepath in sorted(playbook_dir.glob("*playbook.json")):
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
             playbooks.append({
                 "filename": filepath.name,

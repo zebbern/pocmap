@@ -2,7 +2,7 @@
   "mcpServers": {
     "pocmap": {
       "command": "python",
-      "args": ["mcp_server.py", "--transport", "stdio"],
+      "args": ["-m", "pocmap.mcp_server"],
       "env": {
         "POCMAP_LOG_LEVEL": "WARNING"
       }

@@ -62,6 +62,53 @@ BLOCKED_DOMAIN_SUFFIXES = {
 # Max redirect hops to follow while re-validating each one (SSRF safety).
 _MAX_REDIRECTS = 5
 
+# Credential-bearing headers that must be dropped when a redirect crosses to a
+# different origin, so a bearer token / API key / cookie is never replayed to
+# the redirect target. Covers the standard headers ``requests`` itself strips
+# plus ``apiKey`` (the secret header this codebase sends to the NVD API).
+# Compared case-insensitively.
+_SENSITIVE_REDIRECT_HEADERS = frozenset(
+    {"authorization", "proxy-authorization", "cookie", "apikey"}
+)
+
+
+def _should_strip_auth(old_url: str, new_url: str) -> bool:
+    """Return True if a redirect ``old_url`` -> ``new_url`` crosses origin.
+
+    Mirrors :meth:`requests.Session.should_strip_auth`, which our manual
+    redirect loop must reproduce because ``allow_redirects=False`` bypasses
+    requests' built-in cross-host auth stripping. A plain ``http`` -> ``https``
+    upgrade on default ports is *not* a cross-origin move (auth is kept); any
+    change of hostname, or a change of port/scheme away from the defaults, is.
+    """
+    old = urllib.parse.urlparse(old_url)
+    new = urllib.parse.urlparse(new_url)
+    if old.hostname != new.hostname:
+        return True
+    # ``.port`` raises ValueError on a malformed port (e.g. a hostile redirect
+    # ``Location``). Since this runs before the next hop's SSRF re-check, err on
+    # the safe side and strip credentials rather than letting it escape get().
+    try:
+        old_port = old.port
+        new_port = new.port
+    except ValueError:
+        return True
+    # Allow the http -> https upgrade on standard ports without dropping auth.
+    if (
+        old.scheme == "http"
+        and old_port in (80, None)
+        and new.scheme == "https"
+        and new_port in (443, None)
+    ):
+        return False
+    default_ports = {"http": 80, "https": 443}
+    changed_port = old_port != new_port
+    changed_scheme = old.scheme != new.scheme
+    default_pair = (default_ports.get(old.scheme), None)
+    if not changed_scheme and old_port in default_pair and new_port in default_pair:
+        return False
+    return changed_port or changed_scheme
+
 
 def _ip_is_internal(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Return True for any address that must never be reached from a fetch.
@@ -133,9 +180,15 @@ def is_safe_url(url: str) -> bool:
         if not hostname:
             return False
         hostname_lower = hostname.lower()
-        # Block internal hosts
+        # Block internal hosts by EXACT host or dotted-suffix match. A substring
+        # test both over-blocks legitimate hosts (a public IPv6 literal such as
+        # ``2606:4700:4700::1111`` contains the substring ``::1``; a domain like
+        # ``notlocalhost.com`` contains ``localhost``) and is not what keeps us
+        # safe: literal internal IPs are caught by ``_ip_is_internal`` below, and
+        # hostnames that resolve internally are caught at request time by
+        # ``resolves_to_internal_ip``.
         for blocked in BLOCKED_HOSTS:
-            if blocked in hostname_lower:
+            if hostname_lower == blocked or hostname_lower.endswith("." + blocked):
                 return False
         # Block wildcard-DNS / DNS-rebinding services outright
         for suffix in BLOCKED_DOMAIN_SUFFIXES:
@@ -223,10 +276,12 @@ class OfflineError(HTTPError):
     Offline mode (``settings.offline`` / ``POCMAP_OFFLINE`` / a per-client
     ``HTTPClient(offline=True)``) makes :meth:`HTTPClient.get_json` and
     :meth:`HTTPClient.get_text` serve *only* from the persistent cache and never
-    touch the network. A cache **hit** is returned as usual; a cache **miss**
-    raises this error instead of silently returning the ``default`` (empty)
-    value — a source that is merely unreachable offline must never be
-    indistinguishable from "no results".
+    touch the network. A cache **hit** is returned as usual — including an
+    **expired** entry, which is served stale because an air-gapped run cannot
+    refresh it and stale data beats none. Only a genuinely **absent** (or
+    corrupt) entry raises this error, instead of silently returning the
+    ``default`` (empty) value — a source that is merely unreachable offline must
+    never be indistinguishable from "no results".
 
     It subclasses :class:`HTTPError` so existing ``except HTTPError`` handlers
     keep degrading gracefully, but it is a *distinct* type (and maps to the
@@ -552,7 +607,10 @@ class HTTPClient:
         Raises:
             HTTPError: If the request fails after all retries.
         """
-        merged_headers = {**self.headers, **(headers or {})}
+        # ``str | None`` values: a header set to ``None`` is *removed* by
+        # requests during session/request header merge, which is how we drop a
+        # credential header carried at the session level on a cross-host redirect.
+        merged_headers: dict[str, str | None] = {**self.headers, **(headers or {})}
         request_timeout = timeout if timeout is not None else self.timeout
         # Follow redirects manually so EVERY hop is SSRF-validated. requests'
         # default auto-follow would let a 3xx Location reach an internal host
@@ -574,9 +632,18 @@ class HTTPClient:
                         **kwargs,
                     )
                     if resp.is_redirect and resp.headers.get("location"):
-                        current_url = urllib.parse.urljoin(
+                        next_url = urllib.parse.urljoin(
                             current_url, resp.headers["location"]
                         )
+                        # Drop credential-bearing headers before following a
+                        # cross-origin redirect so a token is never replayed to
+                        # the target. Setting to None also removes the
+                        # session-level copy during requests' header merge.
+                        if _should_strip_auth(current_url, next_url):
+                            for _name in list(merged_headers):
+                                if _name.lower() in _SENSITIVE_REDIRECT_HEADERS:
+                                    merged_headers[_name] = None
+                        current_url = next_url
                         current_params = None  # query is carried in the target
                         continue
                     logger.debug("GET %s -> %d", current_url, resp.status_code)
@@ -629,9 +696,12 @@ class HTTPClient:
         cache_key: str | None = None
         if cache.enabled and not no_cache:
             cache_key = HTTPCache.make_key("GET", url, params)
-            # Offline reads are side-effect-free (peek); online keeps the
-            # mutating LRU read (get) so cache behavior is otherwise unchanged.
-            cached_body = cache.peek(cache_key) if offline else cache.get(cache_key)
+            # Offline reads are side-effect-free (peek) and serve stale entries
+            # (air-gapped runs can't refresh, so stale beats nothing); online
+            # keeps the mutating, fresh-only LRU read (get) unchanged.
+            cached_body = (
+                cache.peek(cache_key, allow_stale=True) if offline else cache.get(cache_key)
+            )
             if cached_body is not None:
                 try:
                     return json.loads(cached_body)
@@ -690,9 +760,12 @@ class HTTPClient:
         cache_key: str | None = None
         if cache.enabled and not no_cache:
             cache_key = HTTPCache.make_key("GET", url, params)
-            # Offline reads are side-effect-free (peek); online keeps the
-            # mutating LRU read (get) so cache behavior is otherwise unchanged.
-            cached_body = cache.peek(cache_key) if offline else cache.get(cache_key)
+            # Offline reads are side-effect-free (peek) and serve stale entries
+            # (air-gapped runs can't refresh, so stale beats nothing); online
+            # keeps the mutating, fresh-only LRU read (get) unchanged.
+            cached_body = (
+                cache.peek(cache_key, allow_stale=True) if offline else cache.get(cache_key)
+            )
             if cached_body is not None:
                 return cached_body
         if offline:

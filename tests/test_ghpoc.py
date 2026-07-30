@@ -17,8 +17,7 @@ import inspect
 
 import pytest
 
-# mcp_server lives at the repo root and adds src/ to sys.path on import.
-import mcp_server  # noqa: E402
+import pocmap.mcp_server as mcp_server
 from pocmap.models import Exploit, ExploitSource
 from pocmap.services.exploit_service import ExploitService
 

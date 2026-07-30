@@ -27,7 +27,13 @@ from pocmap.models import (
     ProductDiscoveryResult,
     VersionConstraint,
 )
-from pocmap.utils.http import HTTPClient, HTTPError, OfflineError, is_programming_error
+from pocmap.utils.http import (
+    HTTPClient,
+    HTTPError,
+    OfflineError,
+    RateLimitError,
+    is_programming_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +328,20 @@ class ProductDiscoveryService:
                 # Offline cache-miss must surface, not degrade to an empty result
                 # set (which would read as "no CVEs for this product").
                 raise
+            except RateLimitError as exc:
+                # A throttled upstream must surface as UPSTREAM_ERROR rather than
+                # masquerade as "no CVEs for this product". Only re-raise when
+                # nothing has been collected yet; otherwise degrade gracefully.
+                if not all_cves:
+                    raise
+                logger.warning(
+                    "NVD keyword search throttled after partial fetch "
+                    "for %r (startIndex=%d): %s",
+                    keyword,
+                    start_index,
+                    exc,
+                )
+                break
             except HTTPError as exc:
                 logger.warning(
                     "NVD keyword search failed for %r (startIndex=%d): %s",
@@ -625,12 +645,8 @@ class ProductDiscoveryService:
                             affected_cpes.append(criteria)
                 # Continue collecting CPEs from all nodes/configs
 
-            # Remove duplicate CPEs while preserving order
-            seen_cpes: set[str] = set()
-            affected_cpes = [
-                cpe for cpe in affected_cpes
-                if not (cpe in seen_cpes or seen_cpes.add(cpe))  # type: ignore[func-returns-value]
-            ]
+            # Remove duplicate CPEs while preserving first-appearance order
+            affected_cpes = list(dict.fromkeys(affected_cpes))
 
             # References
             references: dict[str, str] = {}

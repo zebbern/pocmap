@@ -5,6 +5,58 @@ All notable changes to PocMap are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`pocmap-mcp` console script.** The MCP server now lives in `pocmap.mcp_server`
+  and is exposed as `pocmap-mcp`, so Claude Desktop / MCP clients can launch it with
+  `uvx --from pocmap[server] pocmap-mcp` (no local clone or absolute path). Repo-root
+  `python mcp_server.py` remains a thin launcher shim.
+
+### Security
+- **Cross-host redirect credential stripping.** The manual redirect loop now drops
+  credential-bearing headers (`Authorization`, `Proxy-Authorization`, `Cookie`, and the
+  NVD `apiKey`) when a redirect crosses to a different origin, mirroring requests' own
+  protection that `allow_redirects=False` had bypassed — so a bearer token / API key can
+  no longer be replayed to a redirect target (e.g. via an open redirect).
+- **CSV formula-injection hardening (CWE-1236).** String cells exported to CSV that begin
+  with a spreadsheet formula character (`= + - @` / tab / CR) are prefixed with a single
+  quote, so externally-sourced text (CVE descriptions, repo names) can't execute when the
+  file is opened in Excel / Google Sheets. Genuine numbers are left intact.
+- **HTML-report / MCP output XSS escaping.** `mcp_server` now HTML-escapes rendered CVE
+  fields and guards emitted links through a `_safe_url` scheme/IPv6 check, and
+  `report_service` routes hrefs through a `_safe_href` scheme guard — so attacker-adjacent
+  text (descriptions, repo names, URLs) can't inject markup or a `javascript:`/`data:` URI.
+
+### Fixed
+- **SSRF host matching.** `is_safe_url()` now matches internal hosts by exact host or
+  dotted-suffix instead of substring, fixing false-positive blocks of legitimate public
+  hosts (e.g. the IPv6 literal `2606:4700:4700::1111`, which contains the substring `::1`;
+  or `notlocalhost.example.com`). The internal-IP and DNS-resolution guards are unchanged,
+  so the security floor is preserved.
+- **Prioritization crash on missing scores.** `calculate_bounty_potential` /
+  `prioritize_cves` no longer raise `TypeError` when an EPSS/CVSS value is `None` compared
+  against `0` — `None` is normalized before comparison.
+- **`report_service` UTF-8 BOM.** JSON/HTML reports are written with a `utf-8-sig` BOM so
+  they open cleanly in Excel and Windows tooling.
+- **bugbounty UTF-8 encoding.** The 22 bug-bounty site modules now read/write with explicit
+  UTF-8 encoding, fixing mojibake on non-UTF-8 default locales (Windows).
+- **Formatter rank-color dead-letter.** `formatters.py` compares the MSF rank via its enum
+  value instead of `str(Enum)`, so rank colorization no longer silently falls through.
+- **CLI exit-code contract.** Read commands map an upstream throttle to `UPSTREAM_ERROR` (5)
+  instead of a generic error, and CVE.org no longer misreports a rate-limit as
+  `NOT_FOUND` (3).
+- **`recent_service` sort crash.** Sorting recent CVEs no longer raises when publication
+  dates mix timezone-aware and naive datetimes.
+
+### Changed
+- **Pin `[server]` extra to `mcp>=1.2,<2`.** Fresh installs were resolving `mcp` 2.x,
+  which removed `mcp.server.fastmcp` / `FastMCP` and broke the MCP server import.
+  Upper-bound until the server is migrated to the v2 `MCPServer` API.
+- **Offline serves stale.** In `--offline` mode an expired-but-cached entry is now served
+  stale (an air-gapped run can't refresh it, so stale data beats an error); only a
+  genuinely absent entry raises the offline error. Online runs still honour the TTL.
+
 ## [2.1.0] - 2026-07-10
 
 ### Added
@@ -77,5 +129,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CVE/PoC/exploit-discovery toolkit: a Typer CLI, a FastMCP server exposing 19 tools,
   a synchronous Python API, and the bug-bounty toolkit (checklists, playbooks, scoring).
 
+[Unreleased]: https://github.com/zebbern/pocmap/compare/v2.1.0...HEAD
 [2.1.0]: https://github.com/zebbern/pocmap/releases/tag/v2.1.0
 [2.0.0]: https://github.com/zebbern/pocmap/releases/tag/v2.0.0

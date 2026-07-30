@@ -66,6 +66,8 @@ pytestmark = pytest.mark.network
 class TestResult:
     """Tracks the result of a single test."""
 
+    __test__ = False  # Helper class, not a pytest test case.
+
     def __init__(self, name: str):
         self.name = name
         self.passed = False

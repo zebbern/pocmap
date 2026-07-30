@@ -1,6 +1,6 @@
 # PocMap
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/zebbern/pocmap)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/zebbern/pocmap)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2-purple.svg)](https://docs.pydantic.dev/)
@@ -24,40 +24,34 @@ AI-agent-optimized CVE exploit discovery toolkit for bug bounty hunters and secu
 
 ## Installation
 
-PocMap is **not yet published to PyPI** — install from source in editable mode.
-(PyPI / `pipx install pocmap` is planned via release automation; until then use the
-`git clone` flow below.)
-
 ```bash
-# Install from source (editable)
+# From PyPI (CLI + library)
+pip install pocmap
+
+# With the MCP server (FastMCP SDK — required for pocmap-mcp)
+pip install "pocmap[server]"
+
+# From source (editable)
 git clone https://github.com/zebbern/pocmap.git
 cd pocmap
-pip install -e .
+pip install -e ".[server,dev]"
 
-# With the MCP server (FastMCP SDK — required to run mcp_server.py)
-pip install -e ".[server]"
-
-# With async support
-pip install -e ".[async]"
-
-# With development dependencies (pytest, mypy, ruff)
-pip install -e ".[dev]"
-
-# Verify installation
-pocmap --version        # -> pocmap v2.0.0
+# Verify
+pocmap --version
+pocmap-mcp --help    # only after installing with the [server] extra
 ```
 
-Every command is also available as `python -m pocmap ...` if the `pocmap` script is
-not on your `PATH`.
+Every CLI command is also available as `python -m pocmap ...` if the `pocmap` script is
+not on your `PATH`. The MCP server is also available as `python -m pocmap.mcp_server`.
 
 **Requirements:**
 - Python 3.10+ (developed/verified on 3.12)
-- Dependencies: pydantic>=2.0, requests>=2.28, typer>=0.9, rich>=13.0
+- Core dependencies: pydantic>=2.0, requests>=2.28, urllib3, typer>=0.9, click, rich>=13.0, beautifulsoup4, markdown, jinja2, python-dotenv (see `pyproject.toml` for the full list and version pins)
 
 **Optional:**
 - `GITHUB_API_TOKEN` - GitHub PAT for higher rate limits (recommended)
 - `NVD_API_KEY` - NVD API key for increased rate limits
-- The `[server]` extra (FastMCP SDK) is required only for the MCP server
+- The `[server]` extra (FastMCP SDK) is required only for the MCP server / `pocmap-mcp`
 
 ## Quick Start
 
@@ -243,7 +237,9 @@ from pocmap.models import export_schemas
 paths = export_schemas("./schemas")
 # Generates: CVSSScore.json, CVEInfo.json, Exploit.json,
 #            LabEnvironment.json, BugBountyReport.json,
-#            CPEInfo.json, ReportEntry.json, MultiReport.json
+#            CPEInfo.json, RecentExploitResult.json, ReportEntry.json,
+#            MultiReport.json, VersionConstraint.json,
+#            ProductDiscoveryResult.json
 ```
 
 ## Bug Bounty Toolkit
@@ -320,7 +316,7 @@ sorted_cves = prioritize_cves(cve_list, strategy="bounty_potential")
 # Estimate bounty potential
 for cve in sorted_cves[:10]:
     bounty = calculate_bounty_potential(cve)
-    print(f"{cve['id']}: potential=${bounty['estimate']}")
+    print(f"{cve['id']}: potential=${bounty['estimated_median']}")
 ```
 
 ### Scope Management
@@ -571,7 +567,10 @@ pocmap cache clear                         # delete every cached entry
 
 In `--offline` mode (or with `POCMAP_OFFLINE=1`) HTTP GETs are served only from the
 cache; a cache miss surfaces a clear offline error and exits `5` (`UPSTREAM_ERROR`)
-rather than masquerading as "not found" or "no results".
+rather than masquerading as "not found" or "no results". An **expired**-but-cached
+entry is served **stale** offline (an air-gapped run cannot refresh it, so stale
+data beats an error) — only a genuinely absent entry raises. Online runs are
+unaffected: they still honour the TTL and refetch expired entries.
 
 **Cache / offline configuration:**
 
@@ -631,7 +630,9 @@ PocMap includes a full MCP (Model Context Protocol) server exposing 19 AI-native
 
 ### MCP Server Setup for Claude Desktop
 
-Add to your Claude Desktop configuration file:
+Recommended: [`uv`](https://github.com/astral-sh/uv) on `PATH`, no local clone required.
+`--from pocmap[server]` pulls the package with the FastMCP SDK and runs the `pocmap-mcp`
+console script over STDIO.
 
 **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
@@ -641,8 +642,28 @@ Add to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "pocmap": {
-      "command": "python",
-      "args": ["/path/to/pocmap/mcp_server.py"],
+      "command": "uvx",
+      "args": ["--from", "pocmap[server]", "pocmap-mcp"],
+      "env": {
+        "GITHUB_API_TOKEN": "ghp_xxxxxxxxxxxx",
+        "NVD_API_KEY": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+Pin a release with `pocmap-mcp@X.Y.Z` as the last arg (that PyPI version must include the
+`pocmap-mcp` entry point). Optional env vars raise GitHub / NVD rate limits.
+
+**Already installed locally** (`pip install "pocmap[server]"` or `pip install -e ".[server]"`):
+
+```json
+{
+  "mcpServers": {
+    "pocmap": {
+      "command": "pocmap-mcp",
+      "args": [],
       "env": {
         "GITHUB_API_TOKEN": "ghp_xxxxxxxxxxxx",
         "NVD_API_KEY": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
@@ -654,25 +675,26 @@ Add to your Claude Desktop configuration file:
 
 ### Running the MCP Server
 
-The MCP server requires the FastMCP SDK, which ships in the `server` extra. Install it first:
+The MCP server requires the FastMCP SDK (`[server]` extra):
 
 ```bash
-pip install -e ".[server]"
+pip install "pocmap[server]"
+# or from a clone: pip install -e ".[server]"
 ```
 
 ```bash
-# STDIO transport (default, for Claude Desktop)
-python mcp_server.py
+# STDIO (default — what Claude Desktop / most MCP clients expect)
+pocmap-mcp
+python -m pocmap.mcp_server
 
-# SSE transport on port 8000
-python mcp_server.py --transport sse
-
-# HTTP transport
-python mcp_server.py --transport http --host 0.0.0.0 --port 9000
-
-# Debug mode
-python mcp_server.py --debug
+# Other transports / flags
+pocmap-mcp --transport sse
+pocmap-mcp --transport http --host 0.0.0.0 --port 9000
+pocmap-mcp --debug
 ```
+
+Repo-root `python mcp_server.py` is a thin launcher shim to the same module (handy in a
+git checkout). See also [`examples/mcp-config.json`](examples/mcp-config.json).
 
 ### MCP Tools (19 Total)
 
@@ -745,8 +767,11 @@ for p in paths:
 # LabEnvironment.json
 # BugBountyReport.json
 # CPEInfo.json
+# RecentExploitResult.json
 # ReportEntry.json
 # MultiReport.json
+# VersionConstraint.json
+# ProductDiscoveryResult.json
 ```
 
 Use these schemas for:
@@ -769,7 +794,7 @@ Use these schemas for:
 |   Service Layer  |<--->|   Service Layer  |<--->|   Service Layer  |
 |                  |     |                  |     |                  |
 |  CVEService      |     |  ExploitService  |     |  ReportService   |
-|  BugBountyService|     |  LabService      |     |  + 3 more        |
+|  BugBountyService|     |  LabService      |     |  + 2 more        |
 +------------------+     +------------------+     +------------------+
          |                         |                      |
          v                         v                      v
@@ -778,7 +803,7 @@ Use these schemas for:
 |                  |     |                  |     |                  |
 |  NVDClient       |     |  GitHubClient    |     |  CVEInfo         |
 |  CVEOrgClient    |     |  ExploitClient   |     |  Exploit         |
-|  + others        |     |  + others        |     |  + 6 more        |
+|  + others        |     |  + others        |     |  + 9 more        |
 +------------------+     +------------------+     +------------------+
          |                         |
          v                         v
@@ -789,10 +814,10 @@ Use these schemas for:
 ```
 
 **Layered architecture:**
-1. **Presentation Layer**: CLI (`cli.py`) + MCP Server (`mcp_server.py`)
+1. **Presentation Layer**: CLI (`cli.py`) + MCP Server (`pocmap.mcp_server` / `pocmap-mcp`)
 2. **Service Layer**: Business logic (7 services: CVE, Exploit, Lab, Report, Bug Bounty, Recent, Product Discovery)
 3. **Client Layer**: External API clients (NVD, GitHub, CVE.org, ExploitDB, etc.)
-4. **Model Layer**: 8 Pydantic models with full validation and JSON Schema support
+4. **Model Layer**: 11 Pydantic models with full validation and JSON Schema support
 5. **Utility Layer**: HTTP client with retries, formatters, validators, config
 6. **Toolkit Layer**: Bug bounty hunter toolkit (checklists, methodology, templates, prioritization, scope, automation)
 
@@ -800,16 +825,25 @@ Use these schemas for:
 
 ### SSRF Protection
 All HTTP requests pass through `is_safe_url()` validation that blocks:
-- Internal hosts: `localhost`, `127.0.0.1`, `0.0.0.0`, `::1`
-- Cloud metadata endpoints: `169.254.169.254` (AWS), `metadata.google.internal` (GCP)
+- Internal hosts: `localhost`, `127.0.0.1`, `0.0.0.0`, `::1` (matched by exact host / dotted-suffix, so public hosts that merely *contain* those strings — e.g. the IPv6 literal `2606:4700:4700::1111` — are not falsely blocked)
+- Cloud metadata endpoints: `169.254.169.254` (AWS), `metadata.google.internal` (GCP), `100.100.100.200` (Alibaba)
 - Private IP ranges, loopback, link-local, and reserved addresses
+- Numeric-encoded IPs (decimal/hex/octal) and IPv4-mapped IPv6 that canonicalize to an internal address
 - Non-HTTP(S) schemes: `file://`, `ftp://`, `gopher://`, `dict://`
+
+Redirects are followed manually and **every hop is re-validated** through the same guard, and credential-bearing headers (`Authorization`, `Cookie`, NVD `apiKey`) are **stripped on a cross-origin redirect** so a token is never replayed to a redirect target.
+
+### CSV Injection Prevention
+CSV export neutralizes spreadsheet **formula injection** (CWE-1236): a string cell
+that begins with a formula character (`=`, `+`, `-`, `@`, tab, or CR) is prefixed
+with a single quote so externally-sourced text (CVE descriptions, repo names) cannot
+execute when the file is opened in Excel / Google Sheets. Genuine numbers are left intact.
 
 ### Sandboxed Templates
 Jinja2 templates use `SandboxedEnvironment` with `BaseLoader` (no filesystem access) and `select_autoescape` for HTML/XML contexts. Prevents Server-Side Template Injection (SSTI) attacks.
 
 ### Path Traversal Protection
-File operations use `_safe_path()` which normalizes paths and validates they stay within the base directory. Raises `ValueError` on traversal attempts.
+File operations use `safe_path()` which normalizes paths and validates they stay within the base directory. Raises `ValueError` on traversal attempts.
 
 ### Input Validation
 - CVE IDs validated against `^CVE-\d{4}-\d+$` regex pattern

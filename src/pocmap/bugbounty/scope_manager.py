@@ -167,7 +167,7 @@ class ScopeParser:
             self.parse_errors.append(f"File not found: {filepath}")
             return assets
 
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line or line.startswith("#") or line.startswith("//"):
@@ -302,7 +302,7 @@ class ScopeParser:
             self.parse_errors.append(f"File not found: {filepath}")
             return assets
 
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
 
         program = data.get("program", "unknown")
@@ -638,12 +638,12 @@ class ScopeManager:
             "assets": [a.to_dict() for a in self.assets],
             "history": self.scope_history,
         }
-        with open(filepath, "w") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
     def import_scope(self, filepath: str) -> None:
         """Import scope from JSON file."""
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
 
         self.programs = data.get("programs", {})
@@ -686,7 +686,7 @@ class ScopeManager:
             ):
                 domains.append(asset.value)
 
-        with open(filepath, "w") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             f.write("\n".join(sorted(set(domains))))
 
     def generate_nmap_targets_file(self, filepath: str) -> None:
@@ -704,5 +704,5 @@ class ScopeManager:
             ):
                 targets.append(asset.value)
 
-        with open(filepath, "w") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             f.write("\n".join(sorted(set(targets))))

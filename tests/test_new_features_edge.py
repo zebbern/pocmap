@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 # Add the src directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "src"))
@@ -106,7 +106,7 @@ ok, result = expect_no_error(
     lambda: RecentService._parse_since("1h"),
 )
 if ok:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     test(
         "1b. _parse_since('1h') returns datetime ~1 hour ago",
         isinstance(result, datetime) and (now - result).total_seconds() <= 3660,
@@ -119,7 +119,7 @@ ok, result = expect_no_error(
     lambda: RecentService._parse_since("365d"),
 )
 if ok:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     delta_days = (now - result).total_seconds() / 86400
     test(
         "2b. _parse_since('365d') returns datetime ~365 days ago",
@@ -175,7 +175,7 @@ ok, result = expect_no_error(
     lambda: RecentService._parse_since("  24h  "),
 )
 if ok:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     test(
         "9b. _parse_since('  24h  ') returns datetime ~24h ago",
         isinstance(result, datetime) and 23 <= (now - result).total_seconds() / 3600 <= 25,

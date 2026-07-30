@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import logging
 import math
+import re
 from typing import Any
 
 from pocmap.config import (
@@ -23,6 +24,7 @@ from pocmap.utils.http import (
     HTTPClient,
     HTTPError,
     OfflineError,
+    RateLimitError,
     fetch_json,
     fetch_text,
     is_programming_error,
@@ -74,6 +76,9 @@ class CVEOrgClient:
                 return self._parse_record(data)
         except OfflineError:
             # Offline cache-miss must surface, not degrade to "not found".
+            raise
+        except RateLimitError:
+            # A throttled upstream is not a 404 — surface it, don't swallow.
             raise
         except HTTPError:
             logger.debug("CVE.org record not found for %s", cve_id)
@@ -169,7 +174,6 @@ class CVEOrgClient:
                     cwes.append(cwe_id)
                 else:
                     desc_text = desc.get("description", "")
-                    import re
                     found = re.findall(r"CWE-\d+", desc_text, re.I)
                     cwes.extend(found)
 
@@ -184,11 +188,10 @@ class CVEOrgClient:
                             cwes.append(cwe_id)
                         else:
                             desc_text = desc.get("description", "")
-                            import re
                             found = re.findall(r"CWE-\d+", desc_text, re.I)
                             cwes.extend(found)
 
-        return list(set(cwes))
+        return list(dict.fromkeys(cwes))
 
     def _get_cve_state_from_api(self, cve_id: str) -> dict[str, Any] | None:
         """Query the CVE AWG API to check for reserved/rejected states."""
@@ -204,6 +207,9 @@ class CVEOrgClient:
                     "affected_product": None,
                 }
         except OfflineError:
+            raise
+        except RateLimitError:
+            # A throttled upstream is not a 404 — surface it, don't swallow.
             raise
         except HTTPError:
             pass
@@ -332,8 +338,6 @@ class CVEOrgClient:
         Returns:
             Mapping of reference names to URLs.
         """
-        import re
-
         from bs4 import BeautifulSoup
 
         refs: dict[str, str] = {

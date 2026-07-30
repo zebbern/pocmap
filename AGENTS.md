@@ -14,6 +14,29 @@ PocMap provides 19 MCP tools, 3 resources, and 3 prompts for comprehensive vulne
 - User needs CTF lab environments for practice
 - User wants vulnerability reports in JSON or HTML format
 
+## Connecting the MCP server
+
+Recommended Claude Desktop / MCP client config ([`uv`](https://github.com/astral-sh/uv) on `PATH`):
+
+```json
+{
+  "mcpServers": {
+    "pocmap": {
+      "command": "uvx",
+      "args": ["--from", "pocmap[server]", "pocmap-mcp"],
+      "env": {
+        "GITHUB_API_TOKEN": "ghp_xxxxxxxxxxxx",
+        "NVD_API_KEY": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+Alternatives after `pip install "pocmap[server]"`: command `pocmap-mcp` (no args), or
+`python` with args `["-m", "pocmap.mcp_server"]`. See `README.md` → *AI Agent Integration*
+and `examples/mcp-config.json`.
+
 ## Available Tools and When to Use Each
 
 ### CVE Intelligence (3 tools)
@@ -25,6 +48,8 @@ PocMap provides 19 MCP tools, 3 resources, and 3 prompts for comprehensive vulne
 | `check_kev_status` | Determining if a CVE is actively exploited | `kev_status` (bool), `recommendation` (actionable) |
 
 **Decision rule:** Always call `lookup_cve` first when a CVE ID is mentioned. It provides the superset of information. Only call `get_epss_score` or `check_kev_status` individually if the user asks specifically about EPSS or KEV.
+
+**Upstream-failure note:** On an upstream failure (throttle/offline/network), `get_epss_score` and `check_kev_status` now return the standard error envelope (`category` `rate_limited`/`offline`/`network_error` with a `retryable` flag), **not** `available: false` / `kev_status: false`. A genuine "no EPSS data" / "not in KEV" from a *successful* lookup still returns `available: false` / `kev_status: false`.
 
 ### Exploit Discovery (4 tools)
 
@@ -65,6 +90,8 @@ PocMap provides 19 MCP tools, 3 resources, and 3 prompts for comprehensive vulne
 |------|-------------|---------|
 | `cve_to_cpe` | Mapping a CVE to affected products/versions | CPEs with `cpe`, `vendor`, `product`, `version` |
 | `cpe_to_cve` | Finding all CVEs affecting a specific product | List of `cve_ids` |
+
+**Upstream-failure note:** On an upstream failure (throttle/offline/network), `cve_to_cpe` and `cpe_to_cve` now return the standard error envelope (`category` `rate_limited`/`offline`/`network_error` with a `retryable` flag), **not** an empty list. A genuinely empty result from a *successful* lookup still returns `total_count: 0` with an empty list.
 
 ### Report Generation (2 tools)
 
@@ -350,7 +377,7 @@ All MCP tools return JSON error objects with these fields:
 {
   "error": "Description of what went wrong",
   "error_type": "ExceptionClassName",
-  "category": "network_error|not_found|invalid_input|permission_error|unknown",
+  "category": "rate_limited|offline|network_error|not_found|invalid_input|permission_error|unknown",
   "retryable": true,
   "context": "Tool name and arguments"
 }
@@ -360,11 +387,13 @@ All MCP tools return JSON error objects with these fields:
 
 | Category | Cause | Agent Action |
 |----------|-------|--------------|
+| `rate_limited` + `retryable: true` | Upstream API throttled the request (HTTP 429, or GitHub `X-RateLimit-Remaining: 0`) | Back off and retry; suggest adding GITHUB_API_TOKEN or NVD_API_KEY to raise limits |
+| `offline` + `retryable: false` | Offline mode (or `POCMAP_OFFLINE=1`) with a cache miss | Do not retry in-state; a network run is needed to populate the cache |
 | `network_error` + `retryable: true` | Temporary API failure | Retry the call after a brief pause (2-5 seconds) |
 | `network_error` + `retryable: false` | Persistent connectivity issue | Report to user, suggest checking connection |
 | `not_found` | CVE doesn't exist in database | Inform user the CVE may not be published yet |
 | `invalid_input` | Malformed CVE ID or bad parameter | Correct the input (e.g., `CVE-2021-44228` not `CVE202144228`) |
-| `permission_error` | API rate limit or auth failure | Suggest adding GITHUB_API_TOKEN or NVD_API_KEY |
+| `permission_error` | Auth failure or forbidden access | Suggest checking GITHUB_API_TOKEN / NVD_API_KEY validity |
 | `unknown` | Unexpected error | Log details and try alternative tool |
 
 ### CVE ID Validation
@@ -520,8 +549,11 @@ paths = export_schemas("./schemas")
 | `LabEnvironment.json` | LabEnvironment | `platform` (enum), `name`, `url`, `setup_instructions` |
 | `BugBountyReport.json` | BugBountyReport | `source` (enum), `url`, `has_poc`, `title` |
 | `CPEInfo.json` | CPEInfo | `cpe_string`, `vendor`, `product`, `version` |
+| `RecentExploitResult.json` | RecentExploitResult | `cve_info`, `has_poc`, `poc_sources` (enum list), `discovered_at` |
 | `ReportEntry.json` | ReportEntry | `cve_info`, `exploits`, `labs`, `bb_reports`, `generated_at` |
 | `MultiReport.json` | MultiReport | `entries` (dict of CVE ID -> ReportEntry), `generated_at` |
+| `VersionConstraint.json` | VersionConstraint | `major`, `minor`, `patch`, `range_op`, `raw`, `is_wildcard` |
+| `ProductDiscoveryResult.json` | ProductDiscoveryResult | `query`, `normalized_vendor`, `normalized_product`, `version_constraint`, `confirmed_affected`, `possibly_affected`, `not_enough_data`, `total_found`, `search_sources` |
 
 ### Enum Values Reference
 
@@ -606,3 +638,16 @@ When the MCP client supports resources, use these URI patterns:
 6. **Provide actionable recommendations** - Always conclude with clear next steps based on CVSS + EPSS + KEV
 7. **Use playbooks for complex workflows** - They provide structured guidance
 8. **Respect rate limits** - Cache results when possible, especially for bulk operations
+
+## Learned User Preferences
+
+- Prefer minimal diffs that achieve the requested outcome (packaging, docs, and feature work).
+- Prefer uvx-based MCP install for Claude/Cursor (`uvx --from pocmap[server] pocmap-mcp`) without a local clone or absolute path; keep the `pocmap` CLI entrypoint unchanged.
+- When MCP install or run paths change, update README and related agent/docs configs to match.
+- Publishes and owns the PyPI project `pocmap` (https://pypi.org/project/pocmap/).
+
+## Learned Workspace Facts
+
+- MCP server implementation lives in `src/pocmap/mcp_server.py`, exposed as the `pocmap-mcp` console script and `python -m pocmap.mcp_server`; repo-root `mcp_server.py` is a thin launcher shim.
+- Do not target a top-level `mcp_server` module for the console script — that name collides with unrelated site-packages; use `pocmap.mcp_server:main`.
+- The `[server]` extra depends on FastMCP via `mcp.server.fastmcp`; `mcp` 2.x removes that path, so keep an upper bound (`mcp>=1.2,<2`) until the server is migrated.

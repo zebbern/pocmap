@@ -128,25 +128,36 @@ class HTTPCache:
         """
         return self._read(key, mutate=True)
 
-    def peek(self, key: str) -> str | None:
-        """Read-only presence check for a fresh cached body (offline path).
+    def peek(self, key: str, *, allow_stale: bool = False) -> str | None:
+        """Read-only presence check for a cached body (offline path).
 
-        Returns the body on a fresh hit and ``None`` when absent — i.e. missing,
-        expired, or corrupt — so a caller can distinguish "present" from
-        "absent" without falling back to the network. Unlike :meth:`get` this is
-        **side-effect free**: it never deletes expired/corrupt entries and never
-        bumps the mtime. Offline mode uses it because a ``None`` here means
-        "raise a cache-miss (offline)", not "refetch"; entries are left on disk
-        for a later online run to reuse or refresh.
+        Returns the body on a hit and ``None`` when absent — i.e. missing or
+        corrupt — so a caller can distinguish "present" from "absent" without
+        falling back to the network. Unlike :meth:`get` this is **side-effect
+        free**: it never deletes expired/corrupt entries and never bumps the
+        mtime. Offline mode uses it because a ``None`` here means "raise a
+        cache-miss (offline)", not "refetch"; entries are left on disk for a
+        later online run to reuse or refresh.
+
+        Args:
+            allow_stale: When ``True``, an expired-but-present entry is returned
+                instead of being reported as absent. Offline mode passes this so
+                an air-gapped run serves stale data (which it cannot refresh)
+                rather than failing — a genuinely missing/corrupt entry still
+                returns ``None``. When ``False`` (the default) an expired entry
+                reads as absent, preserving the fresh-only contract.
         """
-        return self._read(key, mutate=False)
+        return self._read(key, mutate=False, allow_stale=allow_stale)
 
-    def _read(self, key: str, *, mutate: bool) -> str | None:
+    def _read(self, key: str, *, mutate: bool, allow_stale: bool = False) -> str | None:
         """Shared read for :meth:`get` (``mutate=True``) and :meth:`peek`.
 
         When *mutate* is ``True`` (the :meth:`get` contract) corrupt/expired
         entries are purged on access and a hit refreshes the mtime for LRU;
         when ``False`` (the :meth:`peek` contract) the read has no side effects.
+        When *allow_stale* is ``True`` an expired entry is returned rather than
+        treated as a miss (offline mode: stale data beats no data); it is only
+        ever combined with ``mutate=False`` so the stale entry is left on disk.
         """
         if not self.enabled:
             return None
@@ -179,6 +190,11 @@ class HTTPCache:
         ttl_raw = entry.get("ttl", self.ttl)
         ttl = ttl_raw if isinstance(ttl_raw, (int, float)) else self.ttl
         if ttl >= 0 and (time.time() - created) > ttl:
+            if allow_stale:
+                # Offline: a stale-but-present entry beats no data at all. Leave
+                # it on disk untouched so a later online run can refresh it.
+                logger.debug("serving stale cache entry for key %s (offline)", key)
+                return body
             if mutate:
                 self._safe_unlink(path)  # expired -> discard + miss
             return None

@@ -2,6 +2,9 @@
 
 All 19 MCP tools for vulnerability research, exploit discovery, and report generation.
 
+**Start the server:** `uvx --from pocmap[server] pocmap-mcp` (or installed `pocmap-mcp` /
+`python -m pocmap.mcp_server`). Implementation: `src/pocmap/mcp_server.py`.
+
 Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBountyReport**=`{source,url,has_poc,title}`; **LabEnvironment**=`{platform,name,url}`; **ReportEntry**=`{cve_id,description,cvss_score,severity,epss,kev,exploits,references}`; **RecentExploitResult**=`{cve_id,description,severity,epss,has_poc,in_kev,published_date}`.
 
 ---
@@ -51,24 +54,23 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 **When to use**: To identify affected product configurations or for CPE-based asset correlation.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
-**Returns**: JSON with `cve_id`, `cpes` (list of `CPEInfo`: `cpe23Uri`, `vendor`, `product`, `version`, `criteria`, `vulnerable` (bool)).
+**Returns**: JSON with `cve_id`, `total_count`, `cpes` (list of `CPEInfo`: `cpe`, `vendor`, `product`, `version`).
 **Example**:
 ```json
-{"cve_id": "CVE-2021-44228",
- "cpes": [{"cpe23Uri": "cpe:2.3:a:apache:log4j:2.0:*:*:*:*:*:*:*",
-  "vendor": "apache", "product": "log4j", "version": "2.0",
-  "criteria": "cpe:2.3:a:apache:log4j:*:*:*:*:*:*:*:*", "vulnerable": true}]}
+{"cve_id": "CVE-2021-44228", "total_count": 1,
+ "cpes": [{"cpe": "cpe:2.3:a:apache:log4j:2.0:*:*:*:*:*:*:*",
+  "vendor": "apache", "product": "log4j", "version": "2.0"}]}
 ```
 ### cpe_to_cve
 **Purpose**: Convert a CPE to CVE identifiers.
 **When to use**: When you have a product/version CPE string and want all affecting CVEs.
 **Parameters**:
-- `cpe_string` (str, required): CPE 2.3 URI, e.g. `"cpe:2.3:a:apache:log4j:*:*:*:*:*:*:*:*"`
-**Returns**: JSON with `cpe` (str), `cves` (list of CVE ID strings).
+- `cpe` (str, required): CPE 2.3 URI, e.g. `"cpe:2.3:a:apache:log4j:*:*:*:*:*:*:*:*"`
+**Returns**: JSON with `cpe` (str), `total_count`, `cve_ids` (list of CVE ID strings).
 **Example**:
 ```json
-{"cpe": "cpe:2.3:a:apache:log4j:*:*:*:*:*:*:*:*",
- "cves": ["CVE-2021-44228", "CVE-2021-45046", "CVE-2021-45105"]}
+{"cpe": "cpe:2.3:a:apache:log4j:*:*:*:*:*:*:*:*", "total_count": 3,
+ "cve_ids": ["CVE-2021-44228", "CVE-2021-45046", "CVE-2021-45105"]}
 ```
 ---
 ## Exploit Discovery Tools
@@ -92,6 +94,7 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 **When to use**: When you need a tested exploit framework module with payloads and auxiliary capabilities.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
+- `limit` (int, default `1`): Maximum results to scan (1-10)
 **Returns**: JSON with `cve_id`, `found` (bool), `module` (**Exploit** or `null`).
 **Example**:
 ```json
@@ -106,11 +109,12 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 **When to use**: When you need a standalone exploit script from the Offensive Security database.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
-**Returns**: JSON with `cve_id`, `found` (bool), `exploit` (**Exploit** or `null`).
+- `limit` (int, default `1`): Maximum results to scan (1-10)
+**Returns**: JSON with `cve_id`, `found` (bool), `entry` (**Exploit** or `null`).
 **Example**:
 ```json
 {"cve_id": "CVE-2021-44228", "found": true,
- "exploit": {"source": "exploitdb",
+ "entry": {"source": "exploitdb",
   "url": "https://www.exploit-db.com/exploits/50592",
   "title": "Apache Log4j2 RCE", "language": "Python", "stars": 0, "forks": 0}}
 ```
@@ -119,6 +123,7 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 **When to use**: When you need an automated detection template for scanning at scale or CI/CD.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
+- `limit` (int, default `1`): Maximum results to scan (1-10)
 **Returns**: JSON with `cve_id`, `found` (bool), `template` (**Exploit** or `null`).
 **Example**:
 ```json
@@ -161,11 +166,15 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 **When to use**: When you need a reproducible Docker-based lab for local testing.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
-**Returns**: JSON with `cve_id`, `found` (bool), `dockerfile_url` (str or `null`).
+**Returns**: JSON with `cve_id`, `found` (bool), `url` (str or `null`), and `setup_instructions` (`clone`, `navigate`, `start`, `stop` commands) when found.
 **Example**:
 ```json
 {"cve_id": "CVE-2021-44228", "found": true,
- "dockerfile_url": "https://github.com/vulhub/vulhub/tree/master/log4j/CVE-2021-44228"}
+ "url": "https://github.com/vulhub/vulhub/tree/master/log4j/CVE-2021-44228",
+ "setup_instructions": {
+  "clone": "git clone --depth 1 https://github.com/vulhub/vulhub.git",
+  "navigate": "cd vulhub/log4j/CVE-2021-44228",
+  "start": "docker compose up -d", "stop": "docker compose down"}}
 ```
 ---
 ## Report Generation Tools
@@ -226,14 +235,19 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 - `version` (str, default `""`): `"2.x"`, `"2.14.1"`, `"v2.14.1"`
 - `vendor` (str, default `""`): Vendor name for disambiguation
 - `limit` (int, default `50`): Maximum results
-**Returns**: JSON with `query`, `normalized_vendor`, `normalized_product`, `confirmed_affected` (list), `possibly_affected` (list), `not_enough_data` (list).
+**Returns**: JSON with `query`, `normalized_vendor`, `normalized_product`, `version_constraint` (object or `null`), `total_found`, `confirmed_affected`, `possibly_affected`, `not_enough_data` (each a list of full normalized CVE dicts, same shape as `lookup_cve`), and `summary` (`confirmed_count`, `possibly_count`, `unknown_count`).
 **Example**:
 ```json
-{"query": "struts", "normalized_vendor": "Apache",
- "normalized_product": "Struts",
- "confirmed_affected": ["CVE-2023-50164", "CVE-2021-31805"],
- "possibly_affected": ["CVE-2024-1234"],
- "not_enough_data": ["CVE-2023-9999"]}
+{"query": "struts", "normalized_vendor": "apache",
+ "normalized_product": "apache struts",
+ "version_constraint": {"major": 2, "minor": "x", "patch": null,
+  "range_op": null, "raw": "2.x", "is_wildcard": true},
+ "total_found": 3,
+ "confirmed_affected": [{"id": "CVE-2023-50164", "description": "...",
+  "cvss": {"base_score": 9.8, "severity": "CRITICAL"}, "epss": 0.94,
+  "kev_status": true, "vendor": "Apache", "product": "Struts"}],
+ "possibly_affected": [], "not_enough_data": [],
+ "summary": {"confirmed_count": 1, "possibly_count": 0, "unknown_count": 0}}
 ```
 ---
 ## Playbook Tools
@@ -294,11 +308,11 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 | 2 | `check_kev_status` | Core | `cve_id` | -- |
 | 3 | `get_epss_score` | Core | `cve_id` | -- |
 | 4 | `cve_to_cpe` | Core | `cve_id` | -- |
-| 5 | `cpe_to_cve` | Core | `cpe_string` | -- |
+| 5 | `cpe_to_cve` | Core | `cpe` | -- |
 | 6 | `find_github_pocs` | Exploit | `cve_id` | `limit` (default 10) |
-| 7 | `find_metasploit_module` | Exploit | `cve_id` | -- |
-| 8 | `find_exploitdb_entry` | Exploit | `cve_id` | -- |
-| 9 | `find_nuclei_template` | Exploit | `cve_id` | -- |
+| 7 | `find_metasploit_module` | Exploit | `cve_id` | `limit` (default 1) |
+| 8 | `find_exploitdb_entry` | Exploit | `cve_id` | `limit` (default 1) |
+| 9 | `find_nuclei_template` | Exploit | `cve_id` | `limit` (default 1) |
 | 10 | `find_bug_bounty_reports` | Bug Bounty | `cve_id` | -- |
 | 11 | `find_practice_labs` | Bug Bounty | `cve_id` | -- |
 | 12 | `find_vulhub_docker` | Bug Bounty | `cve_id` | -- |

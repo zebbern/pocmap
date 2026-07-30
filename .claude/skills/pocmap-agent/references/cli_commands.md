@@ -1,11 +1,16 @@
 # PocMap CLI Commands
 
-Verified against `src/pocmap/cli.py`. There are **10 commands**. Each takes a
-positional argument or options as shown. `python -m pocmap --help` is authoritative.
+Verified against `src/pocmap/cli.py`. There are **12 commands** (11 top-level plus the
+`cache` sub-app with `info`/`clear`). Each takes a positional argument or options as
+shown. `python -m pocmap --help` is authoritative.
 
 Most commands hit **live external APIs** (NVD, CVE.org, CISA KEV, EPSS, GitHub,
 ExploitDB, Nuclei, Vulhub, HackerOne, PentesterLand) — expect network latency and
 rate limits.
+
+**Global options** (on `pocmap` itself, before the command): `--format`/`-f`
+`{table,json,csv,md,sarif}`, `--offline`, `--quiet`/`-q`, `--version`/`-v`. Read
+commands also accept `--format`/`-f` and `--quiet`/`-q` locally (the local value wins).
 
 ---
 
@@ -37,9 +42,13 @@ Find recently published CVEs with exploit intelligence.
 | `--sort <cve_date\|severity\|epss>` | Sort field (default `cve_date`) |
 | `--limit <n>` | Max results (default 50, max 100) |
 | `-o`, `--output <file>` | Save JSON report to file |
+| `--diff`, `--since-last` | Show only what changed since the last identical run |
+| `-f`, `--format <table\|json\|csv\|md\|sarif>` | Output format (default `table`) |
+| `-q`, `--quiet` | Suppress decorative output |
 
 ```bash
 pocmap latest --since 24h --severity critical --kev-only
+pocmap latest --since 7d --format sarif --diff
 ```
 
 ## `pocmap discover <product>`
@@ -52,6 +61,9 @@ Results are grouped into confirmed / possibly-affected / not-enough-data.
 | `--vendor <name>` | Vendor for disambiguation |
 | `--limit <n>` | Max CVEs to analyze (default 50, max 100) |
 | `-o`, `--output <file>` | Save JSON report to file |
+| `--diff`, `--since-last` | Show only what changed since the last identical run |
+| `-f`, `--format <table\|json\|csv\|md\|sarif>` | Output format (default `table`) |
+| `-q`, `--quiet` | Suppress decorative output |
 
 ```bash
 pocmap discover "Apache Struts" --version 2.x
@@ -64,9 +76,14 @@ Process multiple CVEs from a file (one ID per line); writes JSON and HTML report
 |------|-------------|
 | `-o`, `--output <dir>` | Output directory for reports (default `.`) |
 | `-t`, `--threads <n>` | Concurrent workers (default 10) |
+| `-f`, `--format <table\|json\|csv\|sarif>` | Output format (`table` writes JSON+HTML files; machine formats emit stdout) |
+| `--fail-on <critical\|high\|kev\|epss>=N>` | CI gate: exit `6` (POLICY_FAIL) if any CVE matches |
+
+Read CVE IDs from stdin with `-` as the file argument.
 
 ```bash
 pocmap bulk cves.txt --output ./reports
+pocmap bulk - --format sarif --fail-on kev      # CI gate, IDs piped on stdin
 ```
 
 ## `pocmap labs <cve>`
@@ -103,8 +120,8 @@ pocmap cpe2cve "cpe:2.3:o:microsoft:windows_10:1607"
 
 ## `pocmap readme <github-url>`
 Display a GitHub repository's README (used to inspect a PoC repo before running it).
-Pipes through `less` on Linux/macOS; prints directly on Windows. URL must start with
-`https://github.com/`.
+Paged portably via `click.echo_via_pager(content)`; the global `--quiet`/`-q` flag
+bypasses paging and prints directly. URL must start with `https://github.com/`.
 
 ```bash
 pocmap readme https://github.com/user/CVE-2021-44228-PoC
@@ -119,6 +136,35 @@ Export JSON schemas for all data models (useful for AI-agent tool definitions).
 
 ```bash
 pocmap schemas --output ./schemas
+```
+
+## `pocmap doctor`
+Run self-diagnostics: Python version, the `[server]` extra, `GITHUB_API_TOKEN` /
+`NVD_API_KEY` *format* (never their values), cache-dir writability, and a live NVD +
+GitHub connectivity probe. Prints a PASS/WARN/FAIL table and exits nonzero if any check
+FAILs (`UPSTREAM_ERROR` if only connectivity failed, else `ERROR`).
+
+| Flag | Description |
+|------|-------------|
+| `--offline` | Skip the live connectivity probe (labelled SKIPPED) |
+| `-f`, `--format <table\|json>` | Output format (default `table`) |
+
+```bash
+pocmap doctor
+pocmap doctor --offline --format json
+```
+
+## `pocmap cache info` / `pocmap cache clear`
+Inspect and clear the persistent HTTP response cache (`cache` is a sub-app).
+`info` reports location, entry count, and on-disk size; `clear` deletes every entry.
+
+| Flag | Description |
+|------|-------------|
+| `-f`, `--format <table\|json>` | Output format (default `table`) |
+
+```bash
+pocmap cache info
+pocmap cache clear
 ```
 
 ---

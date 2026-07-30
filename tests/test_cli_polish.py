@@ -18,16 +18,37 @@ from __future__ import annotations
 
 import re
 import subprocess
+from typing import Any
 
 import pytest
+import requests
 from typer.testing import CliRunner
 
 from pocmap.cli import app
+from pocmap.config import settings
 from pocmap.services.exploit_service import ExploitService
+from pocmap.services.product_service import ProductDiscoveryService
+from pocmap.utils.exit_codes import ExitCode
+from pocmap.utils.http import OfflineError
 
 runner = CliRunner()
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+@pytest.fixture(autouse=True)
+def _restore_offline() -> Any:
+    """Restore the process-wide ``settings.offline`` after any test flips it.
+
+    The CLI ``--offline`` flag calls ``config.enable_offline()``, which mutates the
+    global ``settings`` singleton in place. Without this autouse guard a test that
+    invokes ``--offline`` (the readme/doctor cases below) leaks ``offline=True`` into
+    later test files such as ``test_offline.py``. Mirrors the guard in
+    ``test_cli_features.py``.
+    """
+    original = settings.offline
+    yield
+    object.__setattr__(settings, "offline", original)
 
 
 def _help_text(*argv: str) -> str:
@@ -153,9 +174,9 @@ def test_readme_quiet_prints_plainly(
 
 
 def test_readme_non_github_url_errors(no_subprocess: list[object]) -> None:
-    """A non-GitHub URL is rejected before any fetch, exit 1, no subprocess."""
+    """A non-GitHub URL is malformed caller input -> INVALID_INPUT (4), no subprocess."""
     result = runner.invoke(app, ["readme", "https://evil.example.com/x"])
-    assert result.exit_code == 1
+    assert result.exit_code == ExitCode.INVALID_INPUT
     assert "valid GitHub repository URL" in result.output
     assert no_subprocess == []
 
@@ -163,14 +184,78 @@ def test_readme_non_github_url_errors(no_subprocess: list[object]) -> None:
 def test_readme_empty_reports_not_found(
     monkeypatch: pytest.MonkeyPatch, no_subprocess: list[object]
 ) -> None:
-    """An empty README yields the 'not found' message (and no pager subprocess)."""
+    """An empty README is NO_RESULTS (2), not a false success, and no pager subprocess."""
     monkeypatch.setattr(ExploitService, "get_readme", lambda self, repo: "")
 
     result = runner.invoke(app, ["readme", README_URL])
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == ExitCode.NO_RESULTS
     assert "README.md not found" in result.output
     assert no_subprocess == []
+
+
+def test_readme_offline_cache_miss_exits_upstream(
+    monkeypatch: pytest.MonkeyPatch, no_subprocess: list[object]
+) -> None:
+    """An offline cache miss surfaces cleanly as UPSTREAM_ERROR (5), no traceback."""
+
+    def _raise(self: ExploitService, repo: str) -> str:
+        raise OfflineError("no cached data for this query")
+
+    monkeypatch.setattr(ExploitService, "get_readme", _raise)
+
+    result = runner.invoke(app, ["--offline", "readme", README_URL])
+
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR
+    # A clean typer.Exit, not an uncaught OfflineError bubbling to a traceback.
+    assert not isinstance(result.exception, OfflineError)
+    assert "Offline" in result.output
+    assert no_subprocess == []
+
+
+# ---------------------------------------------------------------------------
+# EXIT-CODE CONTRACT — format rejection + discover upstream failure
+# ---------------------------------------------------------------------------
+
+
+def test_discover_upstream_error_exits_five(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A network/5xx failure in ``discover`` maps to UPSTREAM_ERROR (5), like ``latest``."""
+
+    def _raise(self: ProductDiscoveryService, **kwargs: object) -> object:
+        raise requests.HTTPError("503 Server Error")
+
+    monkeypatch.setattr(ProductDiscoveryService, "discover_by_product", _raise)
+
+    result = runner.invoke(app, ["discover", "Apache Struts"])
+
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR
+
+
+def test_discover_blank_product_exits_invalid_input() -> None:
+    """A whitespace product is malformed caller input -> INVALID_INPUT (4).
+
+    ``ProductDiscoveryService.discover_by_product`` raises a plain ``ValueError``
+    for an empty/whitespace product *before* any network I/O, so this stays
+    offline and must map to exit 4, not UPSTREAM_ERROR (5).
+    """
+    result = runner.invoke(app, ["discover", "   "])
+
+    assert result.exit_code == ExitCode.INVALID_INPUT
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["doctor", "--offline", "--format", "sarif"],
+        ["doctor", "--format", "csv"],
+        ["cache", "info", "--format", "sarif"],
+    ],
+)
+def test_table_json_only_commands_reject_other_formats(argv: list[str]) -> None:
+    """``doctor``/``cache info`` reject csv/md/sarif with INVALID_INPUT (4)."""
+    result = runner.invoke(app, argv)
+    assert result.exit_code == ExitCode.INVALID_INPUT
+    assert "only table and json" in result.output
 
 
 if __name__ == "__main__":  # pragma: no cover - convenience direct runner

@@ -10,9 +10,7 @@ Integration:
 
 Example:
     template = HackerOneTemplate()
-    report = template.render(cve_data=cve_info, impact="RCE achieved")
-    with open("report.md", "w") as f:
-        f.write(report)
+    template.render_to_file("report.md", cve_data=cve_info, impact="RCE achieved")
 """
 
 from __future__ import annotations
@@ -30,8 +28,8 @@ from pocmap.utils.paths import safe_path
 try:
     from jinja2 import BaseLoader, select_autoescape
 except ImportError:
-    BaseLoader = None  # type: ignore
-    select_autoescape = None  # type: ignore
+    BaseLoader = None  # type: ignore[assignment, misc]
+    select_autoescape = None  # type: ignore[assignment]
 
 # Try to create a SandboxedEnvironment (best security); fall back to plain Environment.
 # Typed as Any because the concrete class depends on optional jinja2 imports above.
@@ -56,12 +54,6 @@ if jinja_env is None and BaseLoader is not None and select_autoescape is not Non
         autoescape=select_autoescape(["html", "xml"]),
         enable_async=False,
     )
-
-# Fallback in case jinja2 is not installed at all
-try:
-    from jinja2 import Template
-except ImportError:
-    Template = None  # type: ignore
 
 
 @dataclass
@@ -726,7 +718,7 @@ class BaseTemplate:
         """Render template and save to file."""
         safe_filepath = safe_path(filepath)
         content = self.render(**kwargs)
-        with open(safe_filepath, "w") as f:
+        with open(safe_filepath, "w", encoding="utf-8") as f:
             f.write(content)
 
     def get_required_fields(self) -> list[str]:

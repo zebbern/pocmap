@@ -281,7 +281,7 @@ class BulkCVEAssessor:
             List of AssessmentResult objects
         """
         safe_cve_file = _safe_path(cve_file)
-        with open(safe_cve_file) as f:
+        with open(safe_cve_file, encoding="utf-8") as f:
             cve_list = json.load(f)
         return self.assess_from_scope(
             scope_file, cve_list, strategy, min_cvss
@@ -341,7 +341,7 @@ class BulkCVEAssessor:
                 "results": [r.to_dict() for r in self.results],
             }
             safe_filepath = _safe_path(filepath)
-            with open(safe_filepath, "w") as f:
+            with open(safe_filepath, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
 
         elif format == "markdown":
@@ -364,13 +364,13 @@ class BulkCVEAssessor:
                     f"{r.priority_score:.1f} | {bounty} | {r.recommended_action[:40]}... |"
                 )
             safe_filepath = _safe_path(filepath)
-            with open(safe_filepath, "w") as f:
+            with open(safe_filepath, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines))
 
         elif format == "csv":
             import csv
             safe_filepath = _safe_path(filepath)
-            with open(safe_filepath, "w", newline="") as f:
+            with open(safe_filepath, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow([
                     "rank", "cve_id", "cvss", "epss", "kev",
@@ -464,14 +464,14 @@ high-impact CVEs are discovered that match the scope.
         safe_filepath = _safe_path(filepath)
         path = Path(safe_filepath)
         if path.exists():
-            with open(safe_filepath) as f:
+            with open(safe_filepath, encoding="utf-8") as f:
                 data = json.load(f)
                 self.known_cves = set(data.get("known_cves", []))
 
     def save_known_cves(self, filepath: str) -> None:
         """Save known CVEs to file."""
         safe_filepath = _safe_path(filepath)
-        with open(safe_filepath, "w") as f:
+        with open(safe_filepath, "w", encoding="utf-8") as f:
             json.dump({
                 "known_cves": sorted(self.known_cves),
                 "saved_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
@@ -824,7 +824,7 @@ class ReportDrafter:
         if not self.last_report:
             raise ValueError("No report to save. Generate a report first.")
         safe_filepath = _safe_path(filepath)
-        with open(safe_filepath, "w") as f:
+        with open(safe_filepath, "w", encoding="utf-8") as f:
             f.write(self.last_report)
 
     def generate_poc_template(self, vuln_type: str, language: str = "python") -> str:
@@ -1155,7 +1155,7 @@ class NotificationManager:
 
         try:
             safe_log_file = _safe_path(self.log_file)
-            with open(safe_log_file, "a") as f:
+            with open(safe_log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(notification) + "\\n")
         except Exception as e:
             print(f"File logging failed: {e}")

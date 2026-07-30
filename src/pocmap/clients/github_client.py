@@ -219,6 +219,11 @@ class GitHubClient:
                     return soup.get_text()
             except OfflineError:
                 raise
+            except RateLimitError:
+                # A throttled fetch is an upstream failure, not a missing README:
+                # let it propagate so the caller can report UPSTREAM_ERROR instead
+                # of masquerading as a genuine 404 (NO_RESULTS) via the loop below.
+                raise
             except HTTPError:
                 continue
         return ""

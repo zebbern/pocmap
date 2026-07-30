@@ -237,6 +237,40 @@ def test_offline_does_not_silently_return_default(
 
 
 # ---------------------------------------------------------------------------
+# Offline + EXPIRED entry -> served stale (air-gapped can't refresh)
+# ---------------------------------------------------------------------------
+
+
+def test_offline_serves_stale_entry_instead_of_erroring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An expired-but-present entry is served offline, not turned into an error.
+
+    Offline runs are typically air-gapped and cannot refresh, so stale data is
+    strictly more useful than an :class:`OfflineError`. The fresh-only contract
+    still applies online (``test_cache.py::test_expired_ttl_triggers_refetch``),
+    and a genuinely absent entry still raises (the cold-cache tests above).
+    """
+    clock = _Clock(1000.0)
+    monkeypatch.setattr(cache_mod, "time", clock)
+    cache = HTTPCache(cache_dir=tmp_path, ttl=60, max_bytes=_BIG_CAP, enabled=True)
+    monkeypatch.setattr(http_mod, "_cache", cache)
+    monkeypatch.setattr(http_mod, "settings", replace(settings, offline=True))
+
+    url = "https://api.example/data"
+    cache.set(HTTPCache.make_key("GET", url, None), '{"v": 123}')
+    clock.t = 1000.0 + 3600  # long past the 60s TTL
+
+    client = HTTPClient()
+    try:
+        monkeypatch.setattr(client._session, "get", _exploding_transport)
+        assert client.get_json(url) == {"v": 123}  # served stale, no network
+        assert cache.info()["entries"] == 1  # stale entry left for later refresh
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
 # no_cache / disabled-cache coherence: offline + nothing-to-serve -> OfflineError
 # ---------------------------------------------------------------------------
 

@@ -166,17 +166,19 @@ class Settings:
         import random
 
         if self.user_agents_file.exists():
-            agents = self.user_agents_file.read_text().splitlines()
+            agents = self.user_agents_file.read_text(encoding="utf-8").splitlines()
             if agents:
                 return random.choice(agents).strip()
-        return "pocmap/2.0.0"
+        from pocmap import __version__
+
+        return f"pocmap/{__version__}"
 
 
 def _load_env_file(env_path: Path) -> None:
     """Parse a simple ``.env`` file and inject values into ``os.environ``."""
     if not env_path.exists():
         return
-    for line in env_path.read_text().splitlines():
+    for line in env_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue

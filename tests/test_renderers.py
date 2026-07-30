@@ -132,6 +132,51 @@ def test_csv_empty_input_returns_empty_string() -> None:
     assert render_csv([]) == ""
 
 
+def test_csv_neutralizes_formula_injection() -> None:
+    """String cells that start with a formula char are prefixed with a quote.
+
+    Guards against CSV / formula injection (CWE-1236): externally-sourced text
+    like a CVE description or repo name must not execute when the CSV is opened
+    in a spreadsheet.
+    """
+    rows = [
+        {"id": "CVE-2024-9", "note": '=HYPERLINK("http://evil","x")'},
+        {"id": "CVE-2024-8", "note": "+1+2"},
+        {"id": "CVE-2024-7", "note": "-2+3"},
+        {"id": "CVE-2024-6", "note": "@SUM(A1:A9)"},
+        {"id": "CVE-2024-5", "note": "safe text"},
+    ]
+    parsed = list(csv.DictReader(io.StringIO(render_csv(rows))))
+    assert parsed[0]["note"] == "'=HYPERLINK(\"http://evil\",\"x\")"
+    assert parsed[1]["note"] == "'+1+2"
+    assert parsed[2]["note"] == "'-2+3"
+    assert parsed[3]["note"] == "'@SUM(A1:A9)"
+    assert parsed[4]["note"] == "safe text"  # ordinary text is untouched
+
+
+def test_csv_does_not_mangle_negative_numbers() -> None:
+    """A genuine negative NUMBER is not attacker text and must stay intact."""
+    rows = [{"id": "x", "delta": -5, "score": 9.8}]
+    parsed = list(csv.DictReader(io.StringIO(render_csv(rows))))
+    assert parsed[0]["delta"] == "-5"  # not "'-5"
+    assert parsed[0]["score"] == "9.8"
+
+
+def test_csv_neutralizes_tab_and_cr_leading_cells() -> None:
+    """Tab- and CR-led string cells are also formula leaders (CWE-1236).
+
+    Excel treats a leading TAB / CR the same as ``=``; both must be prefixed
+    with a single quote so the cell is inert when opened in a spreadsheet.
+    """
+    rows = [
+        {"id": "CVE-2024-1", "note": "\tTAB-led"},
+        {"id": "CVE-2024-2", "note": "\rCR-led"},
+    ]
+    parsed = list(csv.DictReader(io.StringIO(render_csv(rows))))
+    assert parsed[0]["note"] == "'\tTAB-led"
+    assert parsed[1]["note"] == "'\rCR-led"
+
+
 # ---------------------------------------------------------------------------
 # Markdown
 # ---------------------------------------------------------------------------
@@ -167,6 +212,24 @@ def test_markdown_without_title_starts_with_table() -> None:
 def test_markdown_empty_input() -> None:
     assert render_markdown([]) == ""
     assert render_markdown([], title="Nothing") == "# Nothing\n"
+
+
+def test_markdown_newline_becomes_br_and_row_stays_one_line() -> None:
+    """A newline inside a cell must not split the table row.
+
+    Both ``\\n`` and ``\\r\\n`` collapse to a ``<br>`` so the data row stays a
+    single physical line (preserving the table's column structure).
+    """
+    output = render_markdown([{"desc": "line1\nline2"}, {"desc": "a\r\nb"}])
+    lines = output.splitlines()
+    data_rows = [ln for ln in lines if ln.startswith("| ") and "---" not in ln]
+    # header + two data rows
+    assert len(data_rows) == 3
+    assert "line1<br>line2" in data_rows[1]
+    assert "a<br>b" in data_rows[2]
+    # No raw newline leaked inside a data row (each is one physical line, one col).
+    assert "\n" not in data_rows[1]
+    assert data_rows[1].count(" | ") == data_rows[0].count(" | ")
 
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ Example:
     sorted_cves = prioritize_cves(cve_list, strategy="composite")
     for cve in sorted_cves[:10]:
         bounty = calculate_bounty_potential(cve)
-        print(f"{cve['id']}: score={cve['priority_score']}, bounty_potential={bounty['estimate']}")
+        print(f"{cve['id']}: score={cve['priority_score']}, bounty_potential={bounty['estimated_median']}")
 """
 
 from __future__ import annotations
@@ -122,7 +122,7 @@ def _has_public_exploit(cve: Any) -> bool:
         _get_value(cve, "exploit_available"),
         _get_value(cve, "has_exploit"),
         _get_value(cve, "exploit_poc"),
-        _get_value(cve, "github_poc_count", 0) > 0,
+        (_get_value(cve, "github_poc_count", 0) or 0) > 0,
         _get_value(cve, "exploitdb_id"),
         _get_value(cve, "metasploit_module"),
         len(exploits) > 0 if isinstance(exploits, list) else False,
@@ -979,7 +979,7 @@ def export_prioritized_list(
         format: Output format (json, csv, markdown)
     """
     if format == "json":
-        with open(filepath, "w") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(cves, f, indent=2, default=str)
     elif format == "markdown":
         lines = [
@@ -1003,11 +1003,11 @@ def export_prioritized_list(
                 f"{'Yes' if _has_public_exploit(cve) else 'No'} | "
                 f"{_get_value(cve, 'priority_score', 0):.1f} |"
             )
-        with open(filepath, "w") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
     elif format == "csv":
         import csv
-        with open(filepath, "w", newline="") as f:
+        with open(filepath, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
                 "rank", "cve_id", "severity", "cvss", "epss",

@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
-import mcp_server
+import pocmap.mcp_server as mcp_server
 from pocmap.bugbounty.prioritization import _get_epss_score
 
 # ---------------------------------------------------------------------------

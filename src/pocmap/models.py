@@ -60,6 +60,20 @@ def validate_cve_count(count: int) -> None:
         raise ValueError(f"Too many CVEs (max {MAX_CVE_BULK}), got {count}")
 
 
+def _coerce_optional_float(value: Any) -> float | None:
+    """Coerce a raw API value into an optional float.
+
+    Sentinel non-values (``None``, ``"N/A"``, ``""``) and unparseable inputs
+    both collapse to ``None``; anything ``float()`` accepts is returned as-is.
+    """
+    if value is None or value == "N/A" or value == "":
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -234,12 +248,7 @@ class CVSSScore(BaseModel):
     @field_validator("base_score", mode="before")
     @classmethod
     def _coerce_base_score(cls, value: Any) -> float | None:
-        if value is None or value == "N/A" or value == "":
-            return None
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return None
+        return _coerce_optional_float(value)
 
     @classmethod
     def from_raw(cls, version: str, base_score: Any, severity: str, vector_string: Any) -> Self:
@@ -440,12 +449,7 @@ class CVEInfo(BaseModel):
     @field_validator("epss", mode="before")
     @classmethod
     def _coerce_epss(cls, value: Any) -> float | None:
-        if value is None or value == "N/A" or value == "":
-            return None
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return None
+        return _coerce_optional_float(value)
 
     @classmethod
     def from_raw_dict(cls, data: dict[str, Any]) -> Self:
@@ -462,6 +466,11 @@ class CVEInfo(BaseModel):
         if isinstance(cwes_raw, str):
             cwes_raw = [c.strip() for c in cwes_raw.split(",") if c.strip()]
 
+        try:
+            state = CVEState(state_raw)
+        except ValueError:
+            state = CVEState.UNKNOWN
+
         return cls(
             id=data.get("cve_id", "CVE-0000-00000"),
             description=data.get("description"),
@@ -473,7 +482,7 @@ class CVEInfo(BaseModel):
             vendor=data.get("vendor") or "N/A",
             product=data.get("affected_product") or "N/A",
             publication_date=data.get("publication_date") or "N/A",
-            state=CVEState(state_raw) if state_raw in CVEState._value2member_map_ else CVEState.UNKNOWN,
+            state=state,
             ransomware_usage=data.get("ransomware_usage"),
             rejected_reason=data.get("rejectedReasons") if state_raw == "REJECTED" else None,
         )

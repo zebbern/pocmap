@@ -406,7 +406,7 @@ def test_load_all_playbooks():
             record_test(f"Playbook valid JSON: {pb_file}", False, error=f"{type(e).__name__}: {e}")
             all_valid = False
 
-    return all_valid
+    assert all_valid
 
 
 def test_playbook_structure():

@@ -19,7 +19,12 @@ from typing import Any
 from pocmap.clients.cveorg_client import CVEOrgClient
 from pocmap.clients.nvd_client import NVDClient
 from pocmap.models import CPEInfo, CVEInfo, CVEState, CVSSScore
-from pocmap.utils.http import OfflineError, ValidationError, is_programming_error
+from pocmap.utils.http import (
+    OfflineError,
+    RateLimitError,
+    ValidationError,
+    is_programming_error,
+)
 from pocmap.utils.validators import validate_cve_id as _validate_cve_id
 
 logger = logging.getLogger(__name__)
@@ -236,7 +241,7 @@ class CVEService:
                     if v.get("cve", {}).get("id")
                 ]
         except Exception as exc:
-            if is_programming_error(exc) or isinstance(exc, OfflineError):
+            if is_programming_error(exc) or isinstance(exc, (OfflineError, RateLimitError)):
                 raise
             logger.warning("CPE-to-CVE lookup failed for %s: %s", cpe_string, exc)
 

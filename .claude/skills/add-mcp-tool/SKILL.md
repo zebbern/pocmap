@@ -12,7 +12,8 @@ description: >
 
 Adding one tool touches **four places in lockstep**. Miss one and you get drift
 (the exact problem the `agent-docs-consistency` reviewer exists to catch). The
-MCP server entrypoint is `mcp_server.py` at the **repo root** (not in the package).
+MCP server implementation is `src/pocmap/mcp_server.py` (console script `pocmap-mcp`).
+Repo-root `mcp_server.py` is only a launcher shim.
 
 Work through this checklist in order.
 
@@ -21,26 +22,22 @@ The tool should be a thin wrapper over a **synchronous** service method that
 returns Pydantic models. If the capability doesn't exist yet, add the method to
 the right service (or a new client under `src/pocmap/clients/` that uses
 `HTTPClient` so it inherits the SSRF guard). Do not put business logic in
-`mcp_server.py`.
+`pocmap.mcp_server`.
 
-## 2. `ServiceAdapter` method + normalizer — in `mcp_server.py`
-`ServiceAdapter` bridges the real package and the standalone mock fallback, and
-converts models → plain dicts. Follow the existing shape:
+## 2. `ServiceAdapter` method + normalizer — in `src/pocmap/mcp_server.py`
+`ServiceAdapter` converts service models → plain dicts for JSON tool responses.
+Follow the existing shape:
 
 ```python
 # inside class ServiceAdapter:
 def my_thing(self, cve_id: str, limit: int = 10) -> list[dict[str, Any]]:
     """One-line description. Returns normalized dicts."""
-    if _HAS_REAL_PACKAGE:
-        try:
-            items = self._exploit.find_something(cve_id, limit=limit)
-            return [self._normalize_exploit(i) for i in items[:limit]]
-        except Exception as e:
-            logger.warning(f"my_thing failed for {cve_id}: {e}")
-            return []
-    else:
-        items = self._exploit.find_something(cve_id, limit)
-        return [self._normalize_exploit(i) for i in items]
+    try:
+        items = self._exploit.find_something(cve_id, limit=limit)
+        return [self._normalize_exploit(i) for i in items[:limit]]
+    except Exception as e:
+        logger.warning(f"my_thing failed for {cve_id}: {e}")
+        return []
 ```
 
 Reuse an existing `_normalize_*` static method (`_normalize_cve_info`,
@@ -48,7 +45,7 @@ Reuse an existing `_normalize_*` static method (`_normalize_cve_info`,
 `_normalize_recent_result`, `_normalize_discovery_result`). Add a new one only if
 the return type is genuinely new; use `ServiceAdapter._enum_val(...)` for enums.
 
-## 3. `@mcp.tool` wrapper — in `mcp_server.py`
+## 3. `@mcp.tool` wrapper — in `src/pocmap/mcp_server.py`
 Register the tool. Match the house conventions exactly:
 
 ```python
@@ -93,8 +90,8 @@ Update **all** of these so the tool count and contract stay truthful:
   `SKILL.md`) if the total changed.
 
 ## 5. Verify
-- `ruff check mcp_server.py` (the PostToolUse hook also runs this on edit).
+- `ruff check src/pocmap/mcp_server.py` (the PostToolUse hook also runs this on edit).
 - Smoke-test the server imports and lists the tool:
-  `python -c "import mcp_server; print([t for t in dir(mcp_server) if not t.startswith('_')][:5])"`
-  or start it: `python mcp_server.py` (STDIO) and call the tool from a client.
+  `python -c "import pocmap.mcp_server as m; print([t for t in dir(m) if not t.startswith('_')][:5])"`
+  or start it: `pocmap-mcp` / `python -m pocmap.mcp_server` (STDIO) and call the tool from a client.
 - Run the `agent-docs-consistency` subagent to confirm no drift was introduced.

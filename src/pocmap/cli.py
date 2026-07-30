@@ -189,6 +189,19 @@ def _reject_sarif(fmt: OutputFormat) -> None:
         raise typer.Exit(ExitCode.INVALID_INPUT)
 
 
+def _only_table_json(fmt: OutputFormat) -> None:
+    """Reject any format other than ``table``/``json`` for the scalar commands.
+
+    ``lookup``, ``doctor``, and ``cache info``/``clear`` only ever render a single
+    record or a diagnostics table, so ``csv``/``md``/``sarif`` have no meaningful
+    shape here. Rather than silently downgrading to the table renderer, fail fast
+    with :attr:`ExitCode.INVALID_INPUT` (4), matching the documented contract.
+    """
+    if fmt not in (OutputFormat.TABLE, OutputFormat.JSON):
+        rprint("[red3]Error: this command supports only table and json output[/red3]")
+        raise typer.Exit(ExitCode.INVALID_INPUT)
+
+
 def _emit_cli_error(exc: Exception, *, fmt: OutputFormat, category: str) -> None:
     """Emit an error as JSON (json mode) or a red console line (every other mode)."""
     if fmt is OutputFormat.JSON:
@@ -649,6 +662,9 @@ def _lookup_json(cve: str, *, language: str | None, limit: int) -> None:
         except OfflineError as exc:
             _emit_json_error(exc, category="offline")
             raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
+        except HTTPError as exc:
+            _emit_json_error(exc, category="upstream_error")
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
         github_pocs = exploit_svc.find_github_pocs(cve)
         if language:
@@ -688,6 +704,7 @@ def lookup(
     # otherwise fall back to whatever the global callback recorded on ctx.obj.
     fmt = output_format if output_format is not None else state.output_format
     is_quiet = quiet or state.quiet
+    _only_table_json(fmt)
 
     # JSON output: machine-readable view model to stdout, no banner/spinners.
     if fmt is OutputFormat.JSON:
@@ -714,6 +731,9 @@ def lookup(
             raise typer.Exit(ExitCode.NOT_FOUND) from exc
         except OfflineError as exc:
             rprint(f"[red3]Offline: {exc}[/red3]")
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
+        except HTTPError as exc:
+            rprint(f"[red3]Upstream error: {exc}[/red3]")
             raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
         # Display CVE info
@@ -855,6 +875,12 @@ def bulk(
     """
     fmt, is_quiet = _resolve_output(ctx, output_format, quiet)
 
+    # ``bulk`` documents only table/json/csv/sarif; reject the undocumented ``md``
+    # up front with INVALID_INPUT (4) rather than silently rendering it.
+    if fmt is OutputFormat.MARKDOWN:
+        rprint("[red3]Error: bulk supports only table, json, csv, and sarif output[/red3]")
+        raise typer.Exit(ExitCode.INVALID_INPUT)
+
     # Validate the --fail-on grammar up front so a typo fails fast (exit 4)
     # before any (potentially slow) report generation.
     predicate: Callable[[CVEInfo], bool] | None = None
@@ -887,7 +913,7 @@ def bulk(
         if not report.entries:
             if fmt is OutputFormat.TABLE:
                 rprint("[red3]No valid CVE entries found in the report[/red3]")
-                raise typer.Exit(ExitCode.ERROR)
+                raise typer.Exit(ExitCode.NO_RESULTS)
             # Machine formats: still emit a well-formed empty document.
             if fmt is OutputFormat.JSON:
                 render({"total": 0, "cves": []}, fmt, console=console)
@@ -989,6 +1015,9 @@ def labs(
             results = service.find_labs(cve)
         except OfflineError as exc:
             raise _offline_exit(exc, fmt=fmt) from exc
+        except HTTPError as exc:
+            _emit_cli_error(exc, fmt=fmt, category="upstream_error")
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
     if not results:
         if fmt is OutputFormat.TABLE:
@@ -1041,6 +1070,9 @@ def bugbounty(
             results = service.find_reports(cve)
         except OfflineError as exc:
             raise _offline_exit(exc, fmt=fmt) from exc
+        except HTTPError as exc:
+            _emit_cli_error(exc, fmt=fmt, category="upstream_error")
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
     if not results:
         if fmt is OutputFormat.TABLE:
@@ -1092,6 +1124,9 @@ def cpes(
             cpe_list = service.get_cpes(cve)
         except OfflineError as exc:
             raise _offline_exit(exc, fmt=fmt) from exc
+        except HTTPError as exc:
+            _emit_cli_error(exc, fmt=fmt, category="upstream_error")
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
     if not cpe_list:
         if fmt is OutputFormat.TABLE:
@@ -1164,6 +1199,9 @@ def cpe2cve(
             raise typer.Exit(ExitCode.INVALID_INPUT) from exc
         except OfflineError as exc:
             raise _offline_exit(exc, fmt=fmt) from exc
+        except HTTPError as exc:
+            _emit_cli_error(exc, fmt=fmt, category="upstream_error")
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
     if not cve_ids:
         if fmt is OutputFormat.TABLE:
@@ -1192,7 +1230,8 @@ def cpe2cve(
     if save:
         rprint(f"[green1]Results saved to {save}[/green1]")
     else:
-        rprint("\n[bold]List of Affected CVE IDs[/bold]")
+        if not is_quiet:
+            rprint("\n[bold]List of Affected CVE IDs[/bold]")
         rprint(result)
 
 
@@ -1208,16 +1247,22 @@ def readme(
     """Display a GitHub repository's README file."""
     if not repo.startswith("https://github.com/"):
         rprint("[red3]Please provide a valid GitHub repository URL[/red3]")
-        raise typer.Exit(1)
+        raise typer.Exit(ExitCode.INVALID_INPUT)
 
     is_quiet = quiet or _state(ctx).quiet
 
     with ExploitService() as exploit_svc:
-        content = exploit_svc.get_readme(repo)
+        try:
+            content = exploit_svc.get_readme(repo)
+        except OfflineError as exc:
+            raise _offline_exit(exc, fmt=OutputFormat.TABLE) from exc
+        except HTTPError as exc:
+            _emit_cli_error(exc, fmt=OutputFormat.TABLE, category="upstream_error")
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
     if not content:
         rprint("[red3]README.md not found[/red3]")
-        return
+        raise typer.Exit(ExitCode.NO_RESULTS)
 
     # Portable paging: click.echo_via_pager (Typer bundles click) works on every
     # platform, Windows included, and degrades gracefully — when stdout is not a
@@ -1542,9 +1587,14 @@ def discover(
             )
         except OfflineError as exc:
             raise _offline_exit(exc, fmt=fmt) from exc
+        except ValueError as exc:
+            # Bad caller input (e.g. empty/whitespace product) is raised before
+            # any network I/O — that is INVALID_INPUT (4), not UPSTREAM_ERROR (5).
+            _emit_cli_error(exc, fmt=fmt, category="invalid_input")
+            raise typer.Exit(ExitCode.INVALID_INPUT) from exc
         except Exception as exc:
             rprint(f"[red3]Error: {exc}[/red3]")
-            raise typer.Exit(1) from exc
+            raise typer.Exit(ExitCode.UPSTREAM_ERROR) from exc
 
     tiers = (
         ("confirmed", result.confirmed_affected),
@@ -1925,6 +1975,7 @@ def doctor(
     state = _state(ctx)
     fmt = output_format if output_format is not None else state.output_format
     is_quiet = quiet or state.quiet
+    _only_table_json(fmt)
 
     checks = _gather_doctor_checks(offline=offline, prober=_probe_upstreams)
     exit_code = _doctor_exit_code(checks)
@@ -1994,6 +2045,7 @@ def cache_info(
     """Show the cache location, entry count, and on-disk size."""
     state = _state(ctx)
     fmt = output_format if output_format is not None else state.output_format
+    _only_table_json(fmt)
     cache = HTTPCache.from_settings()
     info = cache.info()
 
@@ -2037,6 +2089,7 @@ def cache_clear(
     state = _state(ctx)
     fmt = output_format if output_format is not None else state.output_format
     is_quiet = quiet or state.quiet
+    _only_table_json(fmt)
     cache = HTTPCache.from_settings()
     before = cache.info()
     cache.clear()
@@ -2070,7 +2123,11 @@ def main(
     version: Annotated[bool, typer.Option("--version", "-v", help="Show version")] = False,
     output_format: Annotated[
         OutputFormat,
-        typer.Option("--format", "-f", help="Output format for supported commands (table, json)"),
+        typer.Option(
+            "--format",
+            "-f",
+            help="Output format: table, json, csv, md, sarif (see per-command support)",
+        ),
     ] = OutputFormat.TABLE,
     offline: Annotated[
         bool,

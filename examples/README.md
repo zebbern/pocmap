@@ -4,18 +4,18 @@ Runnable, copy-paste examples for the most common PocMap workflows. Every comman
 here matches the real CLI (`pocmap --help`); see the main
 [README](../README.md) for the full reference.
 
-> Install first (PocMap is not yet on PyPI):
+> Install first:
 > ```bash
-> git clone https://github.com/zebbern/pocmap.git && cd pocmap && pip install -e .
+> pip install "pocmap[server]"   # CLI + MCP; omit [server] for CLI-only
+> # or from a clone: pip install -e ".[server]"
 > ```
-> Once published, `pip install pocmap` (or `pipx install pocmap`) will also work.
 
 | File | What it shows |
 |------|---------------|
 | [`ci-github-actions.yml`](ci-github-actions.yml) | A consumer GitHub Actions job that runs `pocmap bulk` as a CI gate: emits **SARIF 2.1.0**, uploads it to GitHub code scanning, and fails the build (`--fail-on kev`) when a CISA KEV CVE is present. |
 | [`daily-brief.sh`](daily-brief.sh) | A daily threat brief: recent critical/high CVEs, showing only what changed since the last run (`latest --since 24h --diff`). |
 | [`lookup-json.sh`](lookup-json.sh) | Machine-readable single-CVE lookup piped through `jq` (`lookup --format json`). |
-| [`mcp-config.json`](mcp-config.json) | A ready Claude Desktop / MCP client config that launches the PocMap MCP server (`python mcp_server.py`). |
+| [`mcp-config.json`](mcp-config.json) | A ready Claude Desktop / MCP client config that launches the PocMap MCP server via `uvx --from pocmap[server] pocmap-mcp`. |
 
 ## Quick reference
 

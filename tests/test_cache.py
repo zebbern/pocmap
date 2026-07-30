@@ -148,6 +148,23 @@ def test_expired_entry_is_a_miss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert cache.info()["entries"] == 0
 
 
+def test_peek_allow_stale_returns_expired_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``peek(allow_stale=True)`` serves an expired entry and leaves it on disk."""
+    clock = _Clock(1000.0)
+    monkeypatch.setattr(cache_mod, "time", clock)
+    cache = HTTPCache(cache_dir=tmp_path, ttl=60, max_bytes=_BIG_CAP)
+    cache.set("k", "stale-body")
+    clock.t = 1000.0 + 61  # past the TTL
+
+    # Default peek: expired reads as absent (fresh-only contract).
+    assert cache.peek("k") is None
+    # allow_stale: the expired body is returned, and the entry is preserved.
+    assert cache.peek("k", allow_stale=True) == "stale-body"
+    assert cache.info()["entries"] == 1
+
+
 def test_corrupt_entry_is_treated_as_miss(tmp_path: Path) -> None:
     cache = HTTPCache(cache_dir=tmp_path, ttl=3600, max_bytes=_BIG_CAP)
     cache.set("k", "good")

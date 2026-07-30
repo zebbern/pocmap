@@ -2,7 +2,7 @@
 name: pocmap-agent
 description: >
   Use the PocMap Python package for CVE exploit discovery, vulnerability research,
-  and bug bounty hunting. Provides 19 MCP tools and 10 CLI commands for looking up
+  and bug bounty hunting. Provides 19 MCP tools and 12 CLI commands for looking up
   CVEs, finding exploits/PoCs, discovering recent vulnerabilities, product-based
   CVE discovery, CPE/CVSS analysis, bug bounty report lookup, and practice lab
   environments. Trigger when the user mentions CVE lookup, exploit discovery,
@@ -23,11 +23,9 @@ and EPSS scores, find bug bounty reports, and locate practice lab environments.
 
 ## Quick Start
 
-Install from source (this repo uses a `src/` layout, installed editable):
-
 ```bash
-pip install -e ".[dev]"     # package + pytest/ruff/mypy
-pip install -e ".[server]"  # FastMCP SDK for the MCP server (the 'server' extra)
+pip install "pocmap[server]"   # CLI + MCP (FastMCP via [server] extra)
+# from a clone: pip install -e ".[server,dev]"
 ```
 
 Run via CLI (both forms work):
@@ -35,7 +33,7 @@ Run via CLI (both forms work):
 ```bash
 pocmap lookup CVE-2021-44228
 python -m pocmap lookup CVE-2021-44228
-python -m pocmap --help      # authoritative list of all 10 commands
+python -m pocmap --help      # authoritative list of all 12 commands
 ```
 
 Use in Python (synchronous; services are context managers):
@@ -48,13 +46,13 @@ with CVEService() as svc:
     print(info.cvss, info.epss, info.kev_status)
 ```
 
-Run the MCP server (entrypoint is at the **repo root**, not inside the package):
+Run the MCP server (implementation: `src/pocmap/mcp_server.py`, script: `pocmap-mcp`):
 
 ```bash
-python mcp_server.py                      # STDIO (default)
-python mcp_server.py --transport sse      # SSE on 127.0.0.1:8000
-python mcp_server.py --transport http     # Streamable HTTP
-# There is NO `python -m pocmap.mcp_server` — that module does not exist.
+uvx --from pocmap[server] pocmap-mcp   # no local install (needs uv)
+pocmap-mcp                             # after pip install "pocmap[server]"
+python -m pocmap.mcp_server            # same module
+python mcp_server.py                   # repo-root launcher shim
 ```
 
 ## Package Architecture
@@ -132,7 +130,7 @@ and a `category`. Always check it:
 ```python
 data = json.loads(result)
 if "error" in data:
-    category = data.get("category", "unknown")   # not_found | network_error | invalid_input | unknown
+    category = data.get("category", "unknown")   # not_found | rate_limited | offline | network_error | invalid_input | permission_error | unknown
     retryable = data.get("retryable", False)
 ```
 
@@ -177,16 +175,21 @@ loaded from env + optional repo-root `.env`. Verified variables:
 | `POCMAP_HTTP_TIMEOUT` | Request timeout, seconds (default 30) |
 | `POCMAP_MAX_RETRIES` | Max retries (default 3) |
 | `POCMAP_BACKOFF_FACTOR` | Backoff multiplier (default 1.5) |
+| `POCMAP_THREAD_POOL_SIZE` | Worker thread count for bulk ops (default 10) |
 | `POCMAP_CACHE_DIR` | Cache directory (default `<repo>/.cache`) |
+| `POCMAP_CACHE_ENABLED` | Enable the persistent HTTP cache (default `true`) |
+| `POCMAP_CACHE_TTL` | Seconds a cached entry stays fresh (default 3600) |
+| `POCMAP_CACHE_MAX_MB` | On-disk cache cap in MB before LRU eviction (default 200) |
+| `POCMAP_OFFLINE` | Serve HTTP only from cache; a miss errors (default `false`) |
 | `POCMAP_LOG_LEVEL` | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
 
-> Do NOT use `POCMAP_REQUEST_TIMEOUT`, `POCMAP_CACHE_TTL`, or `POCMAP_GITHUB_TOKEN` —
-> those appear in older docs but are not read by `config.py`.
+> Do NOT use `POCMAP_REQUEST_TIMEOUT` or `POCMAP_GITHUB_TOKEN` — those appear in older
+> docs but are not read by `config.py` (it's `POCMAP_HTTP_TIMEOUT` and `GITHUB_API_TOKEN`).
 
 ## References
 
 - `references/mcp_tools.md` — all 19 MCP tools with parameters and return shapes.
-- `references/cli_commands.md` — all 10 CLI commands with real flags.
+- `references/cli_commands.md` — all 12 CLI commands with real flags.
 
 ## External Links
 

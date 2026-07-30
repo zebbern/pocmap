@@ -56,11 +56,13 @@ async = [
     "aiosignal>=1.3",
 ]
 server = [
-    "mcp>=1.2",
+    # mcp 2.x removes mcp.server.fastmcp / FastMCP (renamed MCPServer). Pin until migrated.
+    "mcp>=1.2,<2",
 ]
 
 [project.scripts]
 pocmap = "pocmap.cli:app"
+pocmap-mcp = "pocmap.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/zebbern/pocmap"
@@ -101,6 +103,11 @@ check_untyped_defs = true
 [[tool.mypy.overrides]]
 module = ["markdown", "tomli", "tomllib", "mcp.*"]
 ignore_missing_imports = true
+
+# FastMCP presentation layer — kept out of strict mypy until typed incrementally.
+[[tool.mypy.overrides]]
+module = ["pocmap.mcp_server"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

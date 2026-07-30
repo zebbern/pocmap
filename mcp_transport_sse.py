@@ -87,7 +87,7 @@ Examples:
     logger.info(f"PocMap MCP SSE Transport starting on {args.host}:{args.port}")
 
     try:
-        import mcp_server as ms
+        import pocmap.mcp_server as ms
 
         ms.mcp.host = args.host
         ms.mcp.port = args.port

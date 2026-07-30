@@ -24,8 +24,8 @@ All logging is directed to stderr to avoid interfering with the protocol.
 from __future__ import annotations
 
 import logging
-import sys
 import os
+import sys
 
 # Ensure the server directory is on the path
 _SERVER_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,7 +51,7 @@ def main():
     logger.info("PocMap MCP STDIO Transport starting...")
 
     try:
-        import mcp_server
+        import pocmap.mcp_server as mcp_server
         logger.info("Starting MCP server with STDIO transport")
         mcp_server.mcp.run(transport="stdio")
     except KeyboardInterrupt:

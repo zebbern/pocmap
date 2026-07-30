@@ -13,7 +13,7 @@ from typing import Any
 
 from pocmap.config import NVD_API_BASE, settings
 from pocmap.models import CVSSScore, CVSSVersion
-from pocmap.utils.http import HTTPClient, HTTPError, OfflineError
+from pocmap.utils.http import HTTPClient, HTTPError, OfflineError, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,10 @@ class NVDClient:
         except OfflineError:
             # Offline cache-miss must surface, not degrade to None ("no data").
             raise
+        except RateLimitError:
+            # A throttled upstream must surface as UPSTREAM_ERROR, not degrade to
+            # None ("no data") — the CLI relies on this to exit 5, not NO_RESULTS.
+            raise
         except HTTPError:
             # SECURITY: strip apiKey from any logged URL before logging
             safe_cve_id = cve_id.upper()
@@ -97,7 +101,7 @@ class NVDClient:
             ("cvssMetricV2", "cvssData", CVSSVersion.V2_0),
         ]:
             metric_list = metrics.get(version_key)
-            if metric_list and len(metric_list) > 0:
+            if metric_list:
                 cvss_data = metric_list[0].get(cvss_key, {})
                 return CVSSScore.from_raw(
                     version=version_enum.value,
@@ -124,7 +128,7 @@ class NVDClient:
                 value = desc.get("value", "")
                 if value.startswith("CWE-"):
                     cwes.append(value)
-        return list(set(cwes))
+        return list(dict.fromkeys(cwes))
 
     def get_cpe_affected(self, cve_id: str) -> list[str]:
         """Retrieve affected CPE strings for a CVE.

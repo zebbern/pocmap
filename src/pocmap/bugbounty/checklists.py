@@ -921,13 +921,13 @@ class MasterChecklist:
                 for checklist in self.all_checklists
             },
         }
-        with open(filepath, "w") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
     @classmethod
     def import_json(cls, filepath: str) -> MasterChecklist:
         """Import master checklist from JSON file."""
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
         master = cls(data.get("program_name", "Untitled Program"))
         master.created_at = data.get("created_at", master.created_at)

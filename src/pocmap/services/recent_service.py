@@ -38,7 +38,13 @@ from pocmap.models import (
     RecentExploitResult,
     Severity,
 )
-from pocmap.utils.http import HTTPClient, HTTPError, OfflineError, is_programming_error
+from pocmap.utils.http import (
+    HTTPClient,
+    HTTPError,
+    OfflineError,
+    RateLimitError,
+    is_programming_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -424,6 +430,18 @@ class RecentService:
                 # Offline cache-miss must surface, not degrade to an empty window
                 # (which would read as "no recent CVEs" instead of "offline").
                 raise
+            except RateLimitError as exc:
+                # A throttled upstream must surface as UPSTREAM_ERROR rather than
+                # masquerade as an empty window. Only re-raise when nothing has been
+                # collected yet; once we have partial pages, degrade gracefully.
+                if not all_vulns:
+                    raise
+                logger.warning(
+                    "NVD API throttled after partial fetch (startIndex=%d): %s",
+                    start_index,
+                    exc,
+                )
+                break
             except HTTPError as exc:
                 logger.warning(
                     "NVD API request failed (startIndex=%d): %s",
@@ -576,15 +594,15 @@ class RecentService:
         def _date_key(cve: CVEInfo) -> datetime:
             if cve.publication_date and cve.publication_date != "N/A":
                 try:
-                    # Try ISO format
+                    # Try ISO format. Strip tzinfo so keys never mix tz-aware and
+                    # naive datetimes (sorted() would raise TypeError otherwise).
                     dt = datetime.fromisoformat(cve.publication_date.replace("Z", "+00:00"))
-                    return dt
+                    return dt.replace(tzinfo=None)
                 except (ValueError, AttributeError):
                     pass
                 try:
                     # Try "DD Mon YYYY" format
-                    dt = datetime.strptime(cve.publication_date, "%d %b %Y")
-                    return dt
+                    return datetime.strptime(cve.publication_date, "%d %b %Y")
                 except (ValueError, AttributeError):
                     pass
             return datetime.min

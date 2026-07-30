@@ -323,3 +323,30 @@ def test_discover_notify_calls_sender_once(monkeypatch: pytest.MonkeyPatch) -> N
     assert payload["source"] == "discover"
     ids = {item["id"] for item in payload["cves"]}
     assert ids == {"CVE-2021-44228", "CVE-2021-45046"}
+
+
+# ---------------------------------------------------------------------------
+# _url_domain: userinfo credentials must never be echoed (regression b42bc2b)
+# ---------------------------------------------------------------------------
+
+
+def test_url_domain_strips_userinfo_credentials() -> None:
+    from pocmap.bugbounty.automation import _url_domain
+
+    out = _url_domain("https://user:SECRETTOKEN@hooks.example.com/services/xyz")
+    # netloc->hostname fix: userinfo (user:token@) is dropped entirely.
+    assert out == "https://hooks.example.com"
+    assert "SECRETTOKEN" not in out
+    assert "user" not in out
+
+
+def test_url_domain_keeps_explicit_port() -> None:
+    from pocmap.bugbounty.automation import _url_domain
+
+    assert _url_domain("https://hooks.example.com:8443/x") == "https://hooks.example.com:8443"
+
+
+def test_url_domain_garbage_falls_back() -> None:
+    from pocmap.bugbounty.automation import _url_domain
+
+    assert _url_domain("not a url") == "[invalid url]"

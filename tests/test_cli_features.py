@@ -34,6 +34,7 @@ from typer.testing import CliRunner
 import pocmap.services.snapshot as snapshot_mod
 import pocmap.utils.http as http_mod
 from pocmap.cli import app
+from pocmap.clients.cveorg_client import CVEOrgClient
 from pocmap.config import settings
 from pocmap.models import (
     CVEInfo,
@@ -46,6 +47,7 @@ from pocmap.models import (
     ReportEntry,
     Severity,
 )
+from pocmap.services.bb_service import BugBountyService
 from pocmap.services.cve_service import CVEService
 from pocmap.services.exploit_service import ExploitService
 from pocmap.services.lab_service import LabService
@@ -53,6 +55,7 @@ from pocmap.services.recent_service import RecentService
 from pocmap.services.report_service import ReportService
 from pocmap.utils.cache import HTTPCache
 from pocmap.utils.exit_codes import ExitCode
+from pocmap.utils.http import NotFoundError, RateLimitError
 
 runner = CliRunner()
 
@@ -298,6 +301,44 @@ def test_bulk_missing_file_exits_invalid_input() -> None:
     assert result.exit_code == ExitCode.INVALID_INPUT  # 4
 
 
+def test_bulk_undocumented_md_format_exits_invalid_input() -> None:
+    """``bulk --format md`` is undocumented and rejected up front (exit 4)."""
+    result = runner.invoke(app, ["bulk", "-", "--format", "md"], input="x\n")
+    assert result.exit_code == ExitCode.INVALID_INPUT  # 4
+
+
+def test_bulk_empty_report_table_exits_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty report is 'ran fine, found nothing' -> NO_RESULTS (2), not ERROR."""
+    monkeypatch.setattr(
+        ReportService,
+        "generate_bulk_report",
+        lambda self, ids: MultiReport(entries={}),
+    )
+    result = runner.invoke(app, ["bulk", "-"], input="x\n")
+    assert result.exit_code == ExitCode.NO_RESULTS  # 2
+
+
+@pytest.mark.parametrize("fmt", ["json", "csv", "sarif"])
+def test_bulk_empty_report_machine_formats_exit_no_results(
+    monkeypatch: pytest.MonkeyPatch, fmt: str
+) -> None:
+    """Machine formats also exit NO_RESULTS (2) and emit a well-formed empty doc."""
+    monkeypatch.setattr(
+        ReportService,
+        "generate_bulk_report",
+        lambda self, ids: MultiReport(entries={}),
+    )
+    result = runner.invoke(app, ["bulk", "-", "--format", fmt], input="x\n")
+    assert result.exit_code == ExitCode.NO_RESULTS, result.stdout  # 2
+    if fmt == "json":
+        data = json.loads(result.stdout)
+        assert data == {"total": 0, "cves": []}
+    elif fmt == "sarif":
+        log = json.loads(result.stdout)
+        assert log["version"] == "2.1.0"
+        assert log["runs"][0]["results"] == []
+
+
 # ---------------------------------------------------------------------------
 # WATCH-DIFF: latest --diff
 # ---------------------------------------------------------------------------
@@ -480,3 +521,218 @@ def test_offline_cold_cache_json_clean_error(offline_env: HTTPCache) -> None:
     payload = json.loads(result.stdout)
     assert payload["category"] == "offline"
     assert not isinstance(result.exception, http_mod.OfflineError)
+
+
+# ---------------------------------------------------------------------------
+# UPSTREAM-ERROR: an ONLINE RateLimitError is a clean exit 5, never a false
+# NOT_FOUND / uncaught traceback. RateLimitError subclasses HTTPError, so the
+# generic HTTPError handler on each read command catches it after OfflineError.
+# ---------------------------------------------------------------------------
+
+
+def _throttle(*_args: Any, **_kwargs: Any) -> Any:
+    """A stand-in service method that always signals upstream throttling."""
+    raise RateLimitError("rate limited", status_code=429)
+
+
+def test_lookup_table_rate_limited_exits_upstream_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``lookup`` (table) turns an online RateLimitError into a clean exit 5."""
+    monkeypatch.setattr(CVEService, "get_cve_info", _throttle)
+    result = runner.invoke(app, ["lookup", "CVE-2021-44228", "--no-banner"])
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR, result.stdout
+    # Handled cleanly into a typer.Exit (SystemExit), not an uncaught RateLimitError.
+    assert not isinstance(result.exception, RateLimitError)
+    assert "upstream" in result.stdout.lower()
+
+
+def test_lookup_json_rate_limited_exits_upstream_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``lookup --format json`` emits a categorized upstream-error object, exit 5."""
+    monkeypatch.setattr(CVEService, "get_cve_info", _throttle)
+    result = runner.invoke(app, ["lookup", "CVE-2021-44228", "--format", "json"])
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR, result.stdout
+    # Handled cleanly into a typer.Exit (SystemExit), not an uncaught RateLimitError.
+    assert not isinstance(result.exception, RateLimitError)
+    payload = json.loads(result.stdout)
+    assert payload["category"] == "upstream_error"
+
+
+def test_labs_rate_limited_exits_upstream_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(LabService, "find_labs", _throttle)
+    result = runner.invoke(app, ["labs", "CVE-2021-44228"])
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR, result.stdout
+    # Handled cleanly into a typer.Exit (SystemExit), not an uncaught RateLimitError.
+    assert not isinstance(result.exception, RateLimitError)
+
+
+def test_bugbounty_rate_limited_exits_upstream_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(BugBountyService, "find_reports", _throttle)
+    result = runner.invoke(app, ["bugbounty", "CVE-2021-44228"])
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR, result.stdout
+    # Handled cleanly into a typer.Exit (SystemExit), not an uncaught RateLimitError.
+    assert not isinstance(result.exception, RateLimitError)
+
+
+def test_cpes_rate_limited_exits_upstream_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(CVEService, "get_cpes", _throttle)
+    result = runner.invoke(app, ["cpes", "CVE-2021-44228"])
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR, result.stdout
+    # Handled cleanly into a typer.Exit (SystemExit), not an uncaught RateLimitError.
+    assert not isinstance(result.exception, RateLimitError)
+
+
+def test_cpe2cve_rate_limited_exits_upstream_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(CVEService, "cpe_to_cves", _throttle)
+    result = runner.invoke(app, ["cpe2cve", "cpe:2.3:a:apache:log4j:2.0"])
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR, result.stdout
+    # Handled cleanly into a typer.Exit (SystemExit), not an uncaught RateLimitError.
+    assert not isinstance(result.exception, RateLimitError)
+
+
+class _ThrottledHTTP:
+    """Minimal fake HTTP client whose GETs always signal rate limiting."""
+
+    def get_json(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise RateLimitError("rate limited", status_code=429)
+
+    def close(self) -> None:
+        pass
+
+
+def test_cveorg_get_cve_record_propagates_rate_limit() -> None:
+    """A throttled CVE.org fetch must surface as RateLimitError, not a false 404.
+
+    The generic ``except HTTPError`` in ``get_cve_record`` returns ``None`` (a
+    genuine 404 = NOT_FOUND); a RateLimitError must instead propagate so the
+    caller reports UPSTREAM_ERROR rather than silently swallowing throttling.
+    """
+    client = CVEOrgClient(http_client=_ThrottledHTTP())  # type: ignore[arg-type]
+    with pytest.raises(RateLimitError):
+        client.get_cve_record("CVE-2021-44228")
+    # And it is emphatically not degraded into a not-found (None) result.
+    assert not issubclass(RateLimitError, NotFoundError)
+
+
+# ---------------------------------------------------------------------------
+# README: a throttled GitHub fetch is UPSTREAM_ERROR (5), while a genuinely
+# absent README stays NO_RESULTS (2). RateLimitError subclasses HTTPError, so
+# ``readme`` must catch it after OfflineError and exit 5 rather than letting
+# ``get_readme`` swallow it into '' (which would look like a missing README).
+# ---------------------------------------------------------------------------
+
+_README_URL = "https://github.com/example/poc"
+
+
+def test_readme_throttled_exits_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rate-limited README fetch is a clean exit 5, not a false NO_RESULTS."""
+    monkeypatch.setattr(ExploitService, "get_readme", _throttle)
+    result = runner.invoke(app, ["readme", _README_URL])
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR, result.stdout
+    # Handled cleanly into a typer.Exit (SystemExit), not an uncaught RateLimitError.
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_readme_missing_exits_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A genuinely absent README still exits NO_RESULTS (2)."""
+    monkeypatch.setattr(ExploitService, "get_readme", lambda self, repo: "")
+    result = runner.invoke(app, ["readme", _README_URL])
+    assert result.exit_code == ExitCode.NO_RESULTS, result.stdout
+    assert "README.md not found" in result.output
+
+
+# ---------------------------------------------------------------------------
+# UPSTREAM-ERROR (end-to-end, BELOW the swallow): a throttled NVD must surface
+# through the FULL real service stack. These inject the throttle at the HTTP
+# layer (``HTTPClient.get_json`` / the module-level ``fetch_json``), *below* the
+# broad ``except HTTPError`` sites in nvd_client / cve_service / recent_service /
+# product_service. If any of those four re-raises regresses (degrading a
+# RateLimitError to an empty result), cpes/cpe2cve would fall to NO_RESULTS (2)
+# and latest/discover to an empty run — so these tests FAIL on such a regression,
+# unlike the service-patched tests above which sit ABOVE the swallow.
+# ---------------------------------------------------------------------------
+
+
+def _install_http_throttle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every low-level NVD HTTP GET signal rate limiting (429)."""
+
+    def _raise_get_json(self: Any, *_args: Any, **_kwargs: Any) -> Any:
+        raise RateLimitError("rate limited", status_code=429)
+
+    def _raise_fetch_json(*_args: Any, **_kwargs: Any) -> Any:
+        raise RateLimitError("rate limited", status_code=429)
+
+    monkeypatch.setattr(http_mod.HTTPClient, "get_json", _raise_get_json)
+    monkeypatch.setattr(http_mod, "fetch_json", _raise_fetch_json)
+
+
+def test_cpes_http_throttle_below_swallow_exits_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``cpes`` throttled at the HTTP layer exits 5 (nvd_client.get_cve re-raise)."""
+    _install_http_throttle(monkeypatch)
+    result = runner.invoke(app, ["cpes", "CVE-2021-44228"])
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR, result.stdout
+    assert not isinstance(result.exception, RateLimitError)
+
+
+def test_cpe2cve_http_throttle_below_swallow_exits_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``cpe2cve`` throttled at the HTTP layer exits 5 (cve_service.cpe_to_cves re-raise)."""
+    _install_http_throttle(monkeypatch)
+    result = runner.invoke(app, ["cpe2cve", "cpe:2.3:a:apache:log4j:2.0"])
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR, result.stdout
+    assert not isinstance(result.exception, RateLimitError)
+
+
+def test_latest_http_throttle_below_swallow_exits_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``latest`` throttled on the first NVD page exits 5 (recent_service re-raise)."""
+    _install_http_throttle(monkeypatch)
+    result = runner.invoke(app, ["latest"])
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR, result.stdout
+    assert not isinstance(result.exception, RateLimitError)
+
+
+def test_discover_http_throttle_below_swallow_exits_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``discover`` throttled on the first keyword page exits 5 (product_service re-raise)."""
+    _install_http_throttle(monkeypatch)
+    result = runner.invoke(app, ["discover", "nginx"])
+    assert result.exit_code == ExitCode.UPSTREAM_ERROR, result.stdout
+    assert not isinstance(result.exception, RateLimitError)
+
+
+# The empty path must DIVERGE from the throttle path: a genuine empty upstream
+# (not a 429) still exits NO_RESULTS (2), proving the fix narrows only throttling.
+
+
+def test_cpes_genuine_empty_exits_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty NVD result (totalResults 0) still exits NO_RESULTS (2), not 5."""
+
+    def _empty_get_json(self: Any, *_args: Any, **_kwargs: Any) -> Any:
+        return {"totalResults": 0, "vulnerabilities": []}
+
+    monkeypatch.setattr(http_mod.HTTPClient, "get_json", _empty_get_json)
+    result = runner.invoke(app, ["cpes", "CVE-2021-44228"])
+    assert result.exit_code == ExitCode.NO_RESULTS, result.stdout
+
+
+def test_cpe2cve_genuine_empty_exits_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty NVD result (no vulnerabilities) still exits NO_RESULTS (2), not 5."""
+
+    def _empty_fetch_json(*_args: Any, **_kwargs: Any) -> Any:
+        return {"totalResults": 0, "vulnerabilities": []}
+
+    monkeypatch.setattr(http_mod, "fetch_json", _empty_fetch_json)
+    result = runner.invoke(app, ["cpe2cve", "cpe:2.3:a:apache:log4j:2.0"])
+    assert result.exit_code == ExitCode.NO_RESULTS, result.stdout

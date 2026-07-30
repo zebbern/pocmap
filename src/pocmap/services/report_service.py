@@ -27,6 +27,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from pocmap.models import (
     ExploitSource,
@@ -106,6 +107,21 @@ def _escape_html(text: object) -> str:
     if text is None:
         return ""
     return html.escape(str(text))
+
+
+def _safe_href(url: str) -> str:
+    """Return ``url`` only if it uses an http(s) scheme, else ``"#"``.
+
+    Neutralizes script-execution schemes (``javascript:``, ``data:text/html,``)
+    in externally-sourced reference/lab/bug-bounty URLs that ``_escape_html``
+    alone would leave clickable.
+    """
+    try:
+        if urlparse(url).scheme in ("http", "https"):
+            return url
+    except ValueError:
+        pass
+    return "#"
 
 
 class ReportService:
@@ -226,7 +242,7 @@ class ReportService:
 
         cve_ids = [
             line.strip()
-            for line in path.read_text().splitlines()
+            for line in path.read_text(encoding="utf-8-sig").splitlines()
             if line.strip() and not line.startswith("#")
         ]
         return self.generate_bulk_report(cve_ids)
@@ -250,7 +266,7 @@ class ReportService:
         filename = f"pocmap_report_{timestamp}.json"
         filepath = out / filename
 
-        data = report.to_dict() if isinstance(report, ReportEntry) else report.to_dict()
+        data = report.to_dict()
         filepath.write_text(json.dumps(data, indent=2), encoding="utf-8")
         logger.info("JSON report saved to %s", filepath)
         return filepath
@@ -312,7 +328,8 @@ class ReportService:
             if edb:
                 edb_td = (
                     f"<td><span class='badge yes'>"
-                    f"<a href='{_escape_html(edb[0].url)}' target='_blank'>Yes</a></span></td>"
+                    f"<a href='{_escape_html(_safe_href(edb[0].url))}' target='_blank' "
+                    f"rel='noopener noreferrer'>Yes</a></span></td>"
                 )
             else:
                 edb_td = "<td><span class='badge no'>No</span></td>"
@@ -322,7 +339,8 @@ class ReportService:
             if msf:
                 msf_td = (
                     f"<td><span class='badge yes'>"
-                    f"<a href='{_escape_html(msf[0].url)}' target='_blank'>Yes</a></span></td>"
+                    f"<a href='{_escape_html(_safe_href(msf[0].url))}' target='_blank' "
+                    f"rel='noopener noreferrer'>Yes</a></span></td>"
                 )
             else:
                 msf_td = "<td><span class='badge no'>No</span></td>"
@@ -332,7 +350,8 @@ class ReportService:
             if nuc:
                 nuc_td = (
                     f"<td><span class='badge yes'>"
-                    f"<a href='{_escape_html(nuc[0].url)}' target='_blank'>Yes</a></span></td>"
+                    f"<a href='{_escape_html(_safe_href(nuc[0].url))}' target='_blank' "
+                    f"rel='noopener noreferrer'>Yes</a></span></td>"
                 )
             else:
                 nuc_td = "<td><span class='badge no'>No</span></td>"
@@ -354,7 +373,8 @@ class ReportService:
             # Labs cell
             if entry.labs:
                 lab_links = ", ".join(
-                    f"<a href='{_escape_html(lab.url)}' target='_blank'>"
+                    f"<a href='{_escape_html(_safe_href(lab.url))}' target='_blank' "
+                    f"rel='noopener noreferrer'>"
                     f"{_escape_html(lab.name or lab.platform.value)}</a>"
                     for lab in entry.labs[:5]
                 )
@@ -365,7 +385,8 @@ class ReportService:
             # Bug Bounty cell
             if entry.bb_reports:
                 bb_links = ", ".join(
-                    f"<a href='{_escape_html(rep.url)}' target='_blank'>"
+                    f"<a href='{_escape_html(_safe_href(rep.url))}' target='_blank' "
+                    f"rel='noopener noreferrer'>"
                     f"{_escape_html(rep.title or rep.source.value)}</a>"
                     for rep in entry.bb_reports[:5]
                 )
@@ -376,7 +397,8 @@ class ReportService:
             # References cell
             if cve.references:
                 ref_links = ", ".join(
-                    f"<a href='{_escape_html(url)}' target='_blank'>{_escape_html(name)}</a>"
+                    f"<a href='{_escape_html(_safe_href(url))}' target='_blank' "
+                    f"rel='noopener noreferrer'>{_escape_html(name)}</a>"
                     for name, url in list(cve.references.items())[:5]
                 )
                 ref_td = f"<td>{ref_links}</td>"

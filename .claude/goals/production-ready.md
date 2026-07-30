@@ -34,4 +34,4 @@ An independent reviewer, from a clean checkout, re-runs the documented install p
 - Silent truncation of coverage: explicitly list any area not audited.
 
 ### Context
-Security-sensitive tool that fetches attacker-adjacent content and handles API tokens; guards must never regress. Baseline facts: `src/` is authoritative; MCP entrypoint is repo-root `python mcp_server.py` (no `-m pocmap.mcp_server`); the public API is synchronous; 19 MCP tools / 10 CLI commands.
+Security-sensitive tool that fetches attacker-adjacent content and handles API tokens; guards must never regress. Baseline facts: `src/` is authoritative; MCP lives in `pocmap.mcp_server` (`pocmap-mcp` / `python -m pocmap.mcp_server`; repo-root `mcp_server.py` is a launcher shim); the public API is synchronous; 19 MCP tools / 12 CLI commands.

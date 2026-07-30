@@ -164,7 +164,7 @@ def format_exploit_table(exploits: list[Exploit]) -> Table:
     table.add_column("URL", overflow="fold")
 
     for i, ex in enumerate(exploits, start=1):
-        rank_color = _MSF_RANK_COLORS.get(str(ex.rank).lower(), "white") if ex.rank else "white"
+        rank_color = _MSF_RANK_COLORS.get(ex.rank.value, "white") if ex.rank else "white"
         rank_str = f"[{rank_color}]{ex.rank.value}[/{rank_color}]" if ex.rank else "N/A"
         stars_str = str(ex.stars) if ex.stars is not None else "N/A"
         forks_str = str(ex.forks) if ex.forks is not None else "N/A"

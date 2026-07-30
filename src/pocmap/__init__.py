@@ -5,10 +5,9 @@ Proof-of-Concept exploits, lab environments, and bug bounty reports
 related to CVE identifiers.
 
 Example:
-    >>> import asyncio
     >>> from pocmap.services.cve_service import CVEService
-    >>> service = CVEService()
-    >>> info = asyncio.run(service.get_cve_info("CVE-2021-44228"))
+    >>> with CVEService() as service:
+    ...     info = service.get_cve_info("CVE-2021-44228")
     >>> print(info.cvss.base_score)
 
 Modules:
