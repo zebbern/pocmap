@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pocmap.mcp_server as mcp_server
+from pocmap.models import Exploit, ExploitSource
 from pocmap.utils.http import NotFoundError, OfflineError, RateLimitError, categorize_exception
 
 
@@ -247,3 +248,41 @@ def test_get_epss_score_offline_envelope(monkeypatch: Any) -> None:
     assert result["retryable"] is False
     # A cache miss must NOT be reported as "no EPSS data".
     assert "available" not in result
+
+
+# ---------------------------------------------------------------------------
+# db-exploit lookups filter by source BEFORE applying the limit
+# ---------------------------------------------------------------------------
+
+def test_db_exploit_tools_are_not_shadowed_by_earlier_sources(
+    monkeypatch: Any,
+) -> None:
+    """``find_db_exploits`` returns [metasploit, exploitdb, nuclei] in order.
+
+    The default ``limit=1`` used to slice that combined list *before* filtering
+    by source, so any CVE with a Metasploit module reported "no ExploitDB entry"
+    and "no Nuclei template".
+    """
+    fake = [
+        Exploit(source=ExploitSource.METASPLOIT, url="https://msf", title="msf module"),
+        Exploit(source=ExploitSource.EXPLOITDB, url="https://edb", title="edb entry"),
+        Exploit(source=ExploitSource.NUCLEI, url="https://nuc", title="nuclei tpl"),
+    ]
+    adapter = mcp_server.ServiceAdapter()
+    monkeypatch.setattr(adapter._exploit, "find_db_exploits", lambda cve_id: fake)
+
+    cve = "CVE-2021-44228"
+    assert (adapter.find_metasploit_module(cve) or {}).get("title") == "msf module"
+    assert (adapter.find_exploitdb_entry(cve) or {}).get("title") == "edb entry"
+    assert (adapter.find_nuclei_template(cve) or {}).get("title") == "nuclei tpl"
+
+
+def test_db_exploit_tools_return_none_when_their_source_is_absent(
+    monkeypatch: Any,
+) -> None:
+    fake = [Exploit(source=ExploitSource.METASPLOIT, url="https://msf", title="msf")]
+    adapter = mcp_server.ServiceAdapter()
+    monkeypatch.setattr(adapter._exploit, "find_db_exploits", lambda cve_id: fake)
+
+    assert adapter.find_exploitdb_entry("CVE-2021-44228") is None
+    assert adapter.find_nuclei_template("CVE-2021-44228") is None

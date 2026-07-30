@@ -21,6 +21,8 @@ so no network or DNS call is ever made.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 import pocmap.mcp_server as mcp_server
@@ -31,8 +33,10 @@ from pocmap.utils.http import (
     FetchStatus,
     HTTPClient,
     HTTPError,
+    NotFoundError,
     RateLimitError,
     SourceStatus,
+    ValidationError,
     categorize_exception,
     collect_source,
     is_programming_error,
@@ -54,6 +58,16 @@ def _fake_pocs(n: int) -> list[Exploit]:
         )
         for i in range(n)
     ]
+
+
+def _fake_search(n: int) -> Callable[..., list[Exploit]]:
+    """Stand-in for ``GitHubClient.search_pocs``, honouring ``limit``."""
+
+    def _search(cve_id: str, limit: int | None = None) -> list[Exploit]:
+        pocs = _fake_pocs(n)
+        return pocs[:limit] if limit else pocs
+
+    return _search
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +176,20 @@ def test_categorize_exception_taxonomy() -> None:
     assert categorize_exception(ConnectionError("x")) == ("network_error", True)
     assert categorize_exception(ValueError("x")) == ("invalid_input", False)
     assert categorize_exception(RuntimeError("x")) == ("unknown", False)
+    # Package-specific errors must map to their documented categories rather
+    # than falling through to "unknown".
+    assert categorize_exception(ValidationError("x")) == ("invalid_input", False)
+    assert categorize_exception(NotFoundError("x")) == ("not_found", False)
+
+
+def test_validation_error_is_also_a_value_error() -> None:
+    """``except ValueError`` is the idiomatic guard callers reach for.
+
+    It is also what ``categorize_exception`` keys ``invalid_input`` off, so
+    without this base a malformed CVE ID reached agents as ``unknown``.
+    """
+    assert issubclass(ValidationError, ValueError)
+    assert isinstance(ValidationError("x"), ValueError)
 
 
 def test_is_programming_error_targets_our_bugs() -> None:
@@ -236,11 +264,11 @@ def test_find_exploits_with_status_rate_limited_github(monkeypatch) -> None:
     """A rate-limited GitHub reports RATE_LIMITED rather than looking empty."""
     svc = ExploitService()
 
-    def _rl(cve_id: str) -> list[Exploit]:
+    def _rl(cve_id: str, limit: int | None = None) -> list[Exploit]:
         raise RateLimitError("gh throttled", status_code=403)
 
     monkeypatch.setattr(svc._github, "search_pocs", _rl)
-    monkeypatch.setattr(svc._exploits, "search_all", lambda cve_id: [])
+    monkeypatch.setattr(svc._exploits, "search_all", lambda cve_id, limit=None: [])
 
     result = svc.find_exploits_with_status(CVE)
     assert isinstance(result, ExploitFindResult)
@@ -253,8 +281,8 @@ def test_find_exploits_with_status_rate_limited_github(monkeypatch) -> None:
 def test_find_exploits_with_status_empty_is_empty(monkeypatch) -> None:
     """A genuinely empty (successful) lookup is EMPTY, distinct from a failure."""
     svc = ExploitService()
-    monkeypatch.setattr(svc._github, "search_pocs", lambda cve_id: [])
-    monkeypatch.setattr(svc._exploits, "search_all", lambda cve_id: [])
+    monkeypatch.setattr(svc._github, "search_pocs", lambda cve_id, limit=None: [])
+    monkeypatch.setattr(svc._exploits, "search_all", lambda cve_id, limit=None: [])
 
     result = svc.find_exploits_with_status(CVE)
     statuses = {s.name: s.status for s in result.sources}
@@ -266,7 +294,7 @@ def test_find_exploits_with_status_network_error_degrades(monkeypatch) -> None:
     """A network ERROR in one source degrades without crashing the aggregate."""
     svc = ExploitService()
 
-    def _net(cve_id: str) -> list[Exploit]:
+    def _net(cve_id: str, limit: int | None = None) -> list[Exploit]:
         raise HTTPError("NVD down", status_code=503)
 
     db_hit = Exploit(source=ExploitSource.METASPLOIT, url="msf://x", title="mod")
@@ -285,7 +313,7 @@ def test_find_exploits_with_status_propagates_typeerror(monkeypatch) -> None:
     """A programming bug in a source propagates (not masked as empty results)."""
     svc = ExploitService()
 
-    def _bug(cve_id: str) -> list[Exploit]:
+    def _bug(cve_id: str, limit: int | None = None) -> list[Exploit]:
         raise TypeError("bug in our own code")
 
     monkeypatch.setattr(svc._github, "search_pocs", _bug)
@@ -302,7 +330,7 @@ def test_find_exploits_with_status_propagates_typeerror(monkeypatch) -> None:
 def test_find_github_pocs_with_status_rate_limited(monkeypatch) -> None:
     svc = ExploitService()
 
-    def _rl(cve_id: str) -> list[Exploit]:
+    def _rl(cve_id: str, limit: int | None = None) -> list[Exploit]:
         raise RateLimitError("throttled", status_code=429)
 
     monkeypatch.setattr(svc._github, "search_pocs", _rl)
@@ -316,7 +344,7 @@ def test_legacy_find_github_pocs_still_degrades_on_rate_limit(monkeypatch) -> No
     """Non-breaking: the bare-list method keeps returning [] on a throttle."""
     svc = ExploitService()
 
-    def _rl(cve_id: str) -> list[Exploit]:
+    def _rl(cve_id: str, limit: int | None = None) -> list[Exploit]:
         raise RateLimitError("throttled", status_code=429)
 
     monkeypatch.setattr(svc._github, "search_pocs", _rl)
@@ -328,11 +356,11 @@ def test_legacy_find_exploits_does_not_raise_on_rate_limit(monkeypatch) -> None:
     """find_exploits keeps its list contract and degrades on a throttled source."""
     svc = ExploitService()
 
-    def _rl(cve_id: str) -> list[Exploit]:
+    def _rl(cve_id: str, limit: int | None = None) -> list[Exploit]:
         raise RateLimitError("throttled", status_code=403)
 
     monkeypatch.setattr(svc._github, "search_pocs", _rl)
-    monkeypatch.setattr(svc._exploits, "search_all", lambda cve_id: [])
+    monkeypatch.setattr(svc._exploits, "search_all", lambda cve_id, limit=None: [])
     assert svc.find_exploits(CVE) == []  # no crash, just empty
 
 
@@ -368,7 +396,7 @@ def test_source_status_to_dict_shape() -> None:
 def test_adapter_find_github_pocs_with_sources_reports_rate_limit(monkeypatch) -> None:
     adapter = mcp_server.ServiceAdapter()
 
-    def _rl(cve_id: str) -> list[Exploit]:
+    def _rl(cve_id: str, limit: int | None = None) -> list[Exploit]:
         raise RateLimitError("throttled", status_code=403)
 
     monkeypatch.setattr(adapter._exploit._github, "search_pocs", _rl)
@@ -385,7 +413,7 @@ def test_adapter_find_github_pocs_with_sources_reports_rate_limit(monkeypatch) -
 def test_adapter_find_github_pocs_with_sources_ok(monkeypatch) -> None:
     adapter = mcp_server.ServiceAdapter()
     monkeypatch.setattr(
-        adapter._exploit._github, "search_pocs", lambda cve_id: _fake_pocs(4)
+        adapter._exploit._github, "search_pocs", _fake_search(4)
     )
     out = adapter.find_github_pocs_with_sources(CVE, limit=3)
     assert len(out["pocs"]) == 3

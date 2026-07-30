@@ -1,6 +1,6 @@
 # PocMap
 
-[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](https://github.com/zebbern/pocmap)
+[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](https://github.com/zebbern/pocmap)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2-purple.svg)](https://docs.pydantic.dev/)
@@ -11,7 +11,7 @@ AI-agent-optimized CVE exploit discovery toolkit for bug bounty hunters and secu
 
 - **Multi-Source Discovery**: Queries GitHub, Exploit-DB, Metasploit, Nuclei, CTF labs, and bug bounty platforms simultaneously
 - **Structured Pydantic Models**: All data validated and serialized with full type safety and JSON Schema support
-- **MCP Server Integration**: 19 AI-native tools via Model Context Protocol for Claude Desktop, Cursor, and other AI agents
+- **MCP Server Integration**: 20 AI-native tools via Model Context Protocol for Claude Desktop, Cursor, and other AI agents
 - **Bug Bounty Toolkit**: Complete hunter toolkit with checklists, workflows, report templates, prioritization engine, and scope management
 - **Rich CLI**: 12 commands with colorized tables, progress bars, and bulk processing
 - **Composable Output**: `table`, `json`, `csv`, `md`, and `sarif` output on read commands, plus a stable [exit-code contract](#output-formats--exit-codes) for scripting and CI
@@ -28,7 +28,7 @@ AI-agent-optimized CVE exploit discovery toolkit for bug bounty hunters and secu
 # From PyPI (CLI + library)
 pip install pocmap
 
-# With the MCP server (FastMCP SDK — required for pocmap-mcp)
+# With the MCP server (MCP SDK 2.x — required for pocmap-mcp)
 pip install "pocmap[server]"
 
 # From source (editable)
@@ -51,7 +51,7 @@ not on your `PATH`. The MCP server is also available as `python -m pocmap.mcp_se
 **Optional:**
 - `GITHUB_API_TOKEN` - GitHub PAT for higher rate limits (recommended)
 - `NVD_API_KEY` - NVD API key for increased rate limits
-- The `[server]` extra (FastMCP SDK) is required only for the MCP server / `pocmap-mcp`
+- The `[server]` extra (MCP SDK `mcp>=2.0,<3`) is required only for the MCP server / `pocmap-mcp`
 
 ## Quick Start
 
@@ -419,6 +419,7 @@ pocmap latest --since 7d --severity critical --only-with-poc --limit 10 --output
 | `--limit` | Maximum results (1-100, default: 50) |
 | `--output`, `-o` | Save JSON report to file |
 | `--diff`, `--since-last` | Show only what changed since the last identical run (added/removed/changed) |
+| `--notify <url>` | POST a summary of notable CVEs (critical/high or KEV) to a webhook; with `--diff`, only the delta is sent |
 | `--format`, `-f` | Output format: `table` (default), `json`, `csv`, `md`, `sarif` |
 | `--quiet`, `-q` | Suppress decorative output |
 
@@ -426,7 +427,10 @@ pocmap latest --since 7d --severity critical --only-with-poc --limit 10 --output
 
 ## Product Discovery
 
-Find all CVEs affecting a specific product without needing a CVE ID. Uses fuzzy product name matching, version constraint parsing, and NVD keyword search.
+Find all CVEs affecting a specific product without needing a CVE ID. Product names are
+resolved through the **NVD CPE dictionary** to canonical `vendor:product` identifiers,
+and CVEs are then fetched by CPE applicability match with the version constraint applied
+by NVD itself.
 
 ### `pocmap discover`
 
@@ -456,8 +460,33 @@ pocmap discover "Apache Struts" --version 2.x --output ./struts-cves.json
 | `--limit` | Maximum CVEs to analyze (1-100, default: 50) |
 | `--output`, `-o` | Save JSON report to file |
 | `--diff`, `--since-last` | Show only what changed since the last identical run (added/removed/changed) |
+| `--notify <url>` | POST a summary of notable CVEs (critical/high or KEV) to a webhook; with `--diff`, only the delta is sent |
 | `--format`, `-f` | Output format: `table` (default), `json`, `csv`, `md`, `sarif` |
 | `--quiet`, `-q` | Suppress decorative output |
+
+### How a product name is resolved
+
+1. **Alias fast path.** A small curated table maps common shorthands to canonical names
+   (see below). A hit skips the dictionary lookup; a miss costs nothing.
+2. **NVD CPE dictionary.** The product name is resolved to every `vendor:product` pair
+   NVD files CVEs under, ranked by how many CPE entries back each pair. **All** pairs are
+   searched and the results unioned, because products change hands: `nginx` resolves to
+   `igor_sysoev:nginx` (0 CVEs), `nginx:nginx` (2) and `f5:nginx` (41), so taking only the
+   top-ranked pair would find almost nothing. At most 5 pairs are queried; any dropped
+   pairs are logged.
+3. **Keyword fallback.** If the product cannot be resolved at all, `discover` falls back
+   to NVD full-text search. This is materially weaker — it matches CVE *descriptions*, so
+   it is both noisy and incomplete. The result reports which path ran:
+
+| `search_sources` | `matched_cpes` | Meaning |
+|------------------|----------------|---------|
+| `nvd_cpe_match` | the resolved CPE prefixes | Authoritative applicability match |
+| `nvd_keyword_search` | empty | Unresolvable product; noisy full-text fallback |
+
+> **Rate limits.** Discovery costs one dictionary lookup plus one query per resolved pair.
+> Unauthenticated NVD allows 5 requests per 30 seconds, so setting `NVD_API_KEY` is
+> considerably more valuable than it used to be. Responses are cached (see
+> [Caching & Offline Mode](#caching--offline-mode)), so repeat runs are cheap.
 
 ### Product Alias System
 
@@ -477,7 +506,11 @@ The discovery command recognizes common product aliases and abbreviations, so yo
 | `wp` | WordPress |
 | `ie`, `msie` | Internet Explorer |
 
-Aliases are resolved via fuzzy matching against a curated mapping of 60+ products. You can also use partial matches (e.g., "apache struts" is split into vendor=`apache` + product=`struts`).
+Aliases are matched on the whole name, ignoring separators — `apache struts`,
+`apache_struts` and `Apache-Struts` are equivalent — and a known vendor phrase is peeled
+off first, so `"Palo Alto PAN-OS"` becomes vendor=`palo alto` + product=`pan-os`.
+Matching is deliberately not substring-based: anything the table does not recognize goes
+to the CPE dictionary, which covers the full NVD catalogue rather than this short list.
 
 ### Version Constraint Format
 
@@ -494,10 +527,19 @@ Version constraints support multiple formats for flexible version matching:
 | Range (<) | `< 3.0` | Below version 3.0 |
 | None (omit) | - | Any version |
 
-Results are grouped into three confidence tiers:
+Results are grouped into three confidence tiers. Matching considers **every**
+`(vendor, product)` pair a CVE is filed under, not just one — a CVE typically names the
+vulnerable component plus every distribution that shipped it, and judging it by a single
+pair misclassifies the component the CVE is actually about:
+
 - **Confirmed**: Vendor AND product match AND version constraint is met
 - **Possibly**: Vendor OR product matches but version info is unclear
 - **Not enough data**: CVE has insufficient product/version information
+
+Version matching is an interval-overlap test that honours NVD's out-of-band range
+attributes (`versionStartIncluding` / `versionEndExcluding`), which is where modern CVE
+records express affected ranges — the literal version field in the CPE string is usually
+just `*`.
 
 ## Output Formats & Exit Codes
 
@@ -582,6 +624,101 @@ unaffected: they still honour the TTL and refetch expired entries.
 | `POCMAP_CACHE_MAX_MB` | `200` | On-disk cache cap (MB) before LRU eviction. |
 | `POCMAP_OFFLINE` | `false` | Serve only from cache; a miss errors instead of hitting the network. |
 
+## Verifying PoCs (opt-in)
+
+The CVE indexes list repositories that *mention* a CVE, which is not the same as
+repositories that exploit it — link lists, course notes and personal repos all show up.
+Star count does not separate them either: a popular repo can be an index, and a genuine
+one-file PoC often has zero stars.
+
+`verify_github_pocs` downloads the top PoCs' **source** and reports what each actually
+contains:
+
+| Verdict | Meaning |
+|---------|---------|
+| `confirmed` | Names the CVE **in code** and ships runnable code. The only tier that claims the repo exploits the CVE. |
+| `likely` | Names the CVE but has no code — a writeup. |
+| `unverified` | Has code, but never names this CVE. Unproven, *not* disproven: a PoC may be named for its target instead. |
+| `unrelated` | No mention, or an index — a link list, notes repo or scan dump. |
+
+It also derives the language from file extensions, so it needs **zero** GitHub API calls.
+
+The index test is *how many distinct CVEs the repository cites*, not how many files it
+has: a PoC or a writeup is about one vulnerability, while a link list cites dozens.
+Across a 55-repository sample, genuine PoCs cited at most 3 distinct CVEs and the
+indexes cited 10, 22 and 118 — so the boundary sits in a wide empty gap. Citing many
+CVEs only counts against a repo that also ships essentially no code, so a multi-CVE
+exploit toolkit is not mistaken for a list.
+
+```bash
+export POCMAP_ALLOW_FETCH_POC_SOURCE=1
+```
+
+**This is off by default and must be set deliberately.** It writes third-party exploit
+code to disk, which endpoint protection will often quarantine — run it on an isolated VM
+or a dedicated research host. pocmap never executes, imports, or evaluates fetched
+content; it only reads bytes.
+
+The fetcher is bounded and hardened: owner/repo names are validated before they reach the
+URL, transfers go through the same SSRF-guarded HTTP client as everything else (per-hop
+redirect re-validation included), downloads and *extracted* sizes are both capped so a
+decompression bomb cannot fill the disk, and archive members that are absolute, contain
+`..`, or are symlinks/devices are dropped rather than extracted.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POCMAP_ALLOW_FETCH_POC_SOURCE` | `false` | Master switch. Nothing is fetched unless this is set. |
+| `POCMAP_POC_SOURCE_DIR` | `<cache_dir>/poc-source` | Extraction root. |
+| `POCMAP_POC_SOURCE_MAX_MB` | `20` | Per-repo cap on download and extracted size. |
+| `POCMAP_POC_SOURCE_TOTAL_MAX_MB` | `500` | Total cap; oldest fetched repos are evicted first. |
+
+Offline mode has nothing to serve here — tarballs deliberately bypass the HTTP response
+cache — so `--offline` reports that plainly instead of failing obscurely.
+
+### Where to point `POCMAP_POC_SOURCE_DIR`
+
+The default sits under the response cache, which is convenient but is *not* the right
+place on every machine. Two things decide it: whether an on-access scanner will quarantine
+the files, and whether the directory is synced anywhere.
+
+**Windows.** Defender scans NTFS on access and will quarantine exploit source, which both
+interrupts the fetch and silently corrupts any scoring that reads the files back. Either
+put the directory inside WSL2 — its ext4 lives in a VHDX that Defender does not
+real-time scan the way it does NTFS — or add a Defender exclusion for a dedicated path:
+
+```powershell
+# Option A: run pocmap inside WSL2 and keep the source there
+#   (from your WSL shell)
+export POCMAP_POC_SOURCE_DIR="$HOME/.local/share/pocmap/poc-source"
+
+# Option B: stay on Windows and exclude one dedicated directory (admin PowerShell)
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\pocmap\poc-source"
+Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\pocmap\poc-source"
+$env:POCMAP_POC_SOURCE_DIR = "$env:LOCALAPPDATA\pocmap\poc-source"
+```
+
+Exclude the narrowest path that works — one directory used only for this — never your
+home directory or the whole repo.
+
+**Linux / macOS.** No on-access scanner by default, so a per-user cache path is fine:
+
+```bash
+export POCMAP_POC_SOURCE_DIR="$HOME/.cache/pocmap/poc-source"
+```
+
+**VM or dedicated research host.** Anywhere. This is the intended environment and needs
+no special handling.
+
+**Do not point it at a synced or shared folder.** OneDrive, Dropbox, iCloud Drive and
+Google Drive will upload the exploit source to cloud storage, where the provider's own
+scanner may flag the account and the content may be shared further than intended. This is
+easy to hit by accident on Windows, where `Documents` is frequently redirected to
+OneDrive — so a repo cloned there gets a OneDrive-synced `.cache/` with it. Prefer
+`%LOCALAPPDATA%` (never synced) over anything under `Documents`.
+
+The same reasoning applies to `POCMAP_CACHE_DIR`, though it holds only API responses
+rather than exploit code, so it is far less sensitive.
+
 ## Diagnostics: `doctor` & `cache`
 
 `pocmap doctor` is the fastest path from "installed" to "working". It checks the Python
@@ -626,12 +763,12 @@ GitHub Actions job that runs the gate and uploads the SARIF to code scanning, an
 
 ## AI Agent Integration
 
-PocMap includes a full MCP (Model Context Protocol) server exposing 19 AI-native tools for integration with Claude Desktop, Cursor, and other MCP-compatible clients.
+PocMap includes a full MCP (Model Context Protocol) server exposing 20 AI-native tools for integration with Claude Desktop, Cursor, and other MCP-compatible clients.
 
 ### MCP Server Setup for Claude Desktop
 
 Recommended: [`uv`](https://github.com/astral-sh/uv) on `PATH`, no local clone required.
-`--from pocmap[server]` pulls the package with the FastMCP SDK and runs the `pocmap-mcp`
+`--from pocmap[server]` pulls the package with the MCP SDK and runs the `pocmap-mcp`
 console script over STDIO.
 
 **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -675,7 +812,9 @@ Pin a release with `pocmap-mcp@X.Y.Z` as the last arg (that PyPI version must in
 
 ### Running the MCP Server
 
-The MCP server requires the FastMCP SDK (`[server]` extra):
+The MCP server requires the MCP SDK (`[server]` extra). It serves protocol
+`2026-07-28` (stateless core); the SDK still speaks earlier protocol versions to
+clients that have not upgraded:
 
 ```bash
 pip install "pocmap[server]"
@@ -696,7 +835,7 @@ pocmap-mcp --debug
 Repo-root `python mcp_server.py` is a thin launcher shim to the same module (handy in a
 git checkout). See also [`examples/mcp-config.json`](examples/mcp-config.json).
 
-### MCP Tools (19 Total)
+### MCP Tools (20 Total)
 
 | Tool | Category | Description |
 |------|----------|-------------|
@@ -704,6 +843,7 @@ git checkout). See also [`examples/mcp-config.json`](examples/mcp-config.json).
 | `get_epss_score` | CVE Intel | EPSS exploitation probability score (0.0-1.0) with risk level |
 | `check_kev_status` | CVE Intel | Check CISA Known Exploited Vulnerabilities catalog status |
 | `find_github_pocs` | Exploits | GitHub PoC repos with stars, language, and forks |
+| `verify_github_pocs` | Exploits | **Reads PoC source** to score whether a repo really exploits the CVE (opt-in) |
 | `find_metasploit_module` | Exploits | Metasploit module availability and msfconsole command |
 | `find_exploitdb_entry` | Exploits | ExploitDB entry with searchsploit command |
 | `find_nuclei_template` | Exploits | Nuclei scanner template for detection/verification |
@@ -714,7 +854,7 @@ git checkout). See also [`examples/mcp-config.json`](examples/mcp-config.json).
 | `discover_product_cves` | Discovery | Find CVEs by product name with version constraints |
 | `cve_to_cpe` | Conversion | Convert CVE to affected CPE identifiers |
 | `cpe_to_cve` | Conversion | Find all CVEs affecting a given product (CPE) |
-| `generate_json_report` | Reports | Comprehensive JSON report for CVEs |
+| `generate_json_report` | Reports | **One-shot CVE assessment** — details + all exploits + labs + bug bounty reports for one or many CVEs in a single call |
 | `generate_html_report` | Reports | Self-contained HTML report with styled cards |
 | `get_cve_assessment_playbook` | Playbooks | Full CVE assessment workflow playbook |
 | `get_rapid_response_playbook` | Playbooks | Emergency response playbook for critical CVEs |
@@ -785,7 +925,7 @@ Use these schemas for:
 ```
 +------------------+     +------------------+     +------------------+
 |     CLI Layer    |     |   MCP Server     |     |   Python API     |
-|   (Typer/Rich)   |     |  (FastMCP/19     |     |   (Services)     |
+|   (Typer/Rich)   |     |  (MCP SDK / 20   |     |   (Services)     |
 +------------------+     |     Tools)       |     +------------------+
          |               +------------------+             |
          |                         |                      |
@@ -802,8 +942,8 @@ Use these schemas for:
 |  Client Layer    |     |  Client Layer    |     |   Models Layer   |
 |                  |     |                  |     |                  |
 |  NVDClient       |     |  GitHubClient    |     |  CVEInfo         |
-|  CVEOrgClient    |     |  ExploitClient   |     |  Exploit         |
-|  + others        |     |  + others        |     |  + 9 more        |
+|  CPEDictClient   |     |  ExploitClient   |     |  Exploit         |
+|  CVEOrgClient    |     |  + others        |     |  + 11 more       |
 +------------------+     +------------------+     +------------------+
          |                         |
          v                         v
@@ -817,7 +957,7 @@ Use these schemas for:
 1. **Presentation Layer**: CLI (`cli.py`) + MCP Server (`pocmap.mcp_server` / `pocmap-mcp`)
 2. **Service Layer**: Business logic (7 services: CVE, Exploit, Lab, Report, Bug Bounty, Recent, Product Discovery)
 3. **Client Layer**: External API clients (NVD, GitHub, CVE.org, ExploitDB, etc.)
-4. **Model Layer**: 11 Pydantic models with full validation and JSON Schema support
+4. **Model Layer**: 13 Pydantic models with full validation and JSON Schema support (11 exported as standalone JSON schemas)
 5. **Utility Layer**: HTTP client with retries, formatters, validators, config
 6. **Toolkit Layer**: Bug bounty hunter toolkit (checklists, methodology, templates, prioritization, scope, automation)
 
@@ -890,6 +1030,10 @@ EOF
 | `POCMAP_CACHE_TTL` | 3600 | Seconds a cached entry stays fresh |
 | `POCMAP_CACHE_MAX_MB` | 200 | On-disk cache cap (MB) before LRU eviction |
 | `POCMAP_OFFLINE` | false | Serve HTTP only from cache; a miss errors instead of hitting the network |
+| `POCMAP_ALLOW_FETCH_POC_SOURCE` | false | Opt in to downloading PoC **source code** to disk (see below) |
+| `POCMAP_POC_SOURCE_DIR` | `<cache>/poc-source` | Where fetched PoC source is extracted |
+| `POCMAP_POC_SOURCE_MAX_MB` | 20 | Per-repo cap, applied to download **and** extracted size |
+| `POCMAP_POC_SOURCE_TOTAL_MAX_MB` | 500 | Total on-disk cap for fetched sources |
 
 See [Caching & Offline Mode](#caching--offline-mode) and the [exit-code contract](#output-formats--exit-codes)
 for how these behave at runtime.

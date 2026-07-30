@@ -43,6 +43,7 @@ Find recently published CVEs with exploit intelligence.
 | `--limit <n>` | Max results (default 50, max 100) |
 | `-o`, `--output <file>` | Save JSON report to file |
 | `--diff`, `--since-last` | Show only what changed since the last identical run |
+| `--notify <url>` | POST a summary of notable CVEs (critical/high or KEV) to a webhook; with `--diff`, only the delta is sent |
 | `-f`, `--format <table\|json\|csv\|md\|sarif>` | Output format (default `table`) |
 | `-q`, `--quiet` | Suppress decorative output |
 
@@ -62,6 +63,7 @@ Results are grouped into confirmed / possibly-affected / not-enough-data.
 | `--limit <n>` | Max CVEs to analyze (default 50, max 100) |
 | `-o`, `--output <file>` | Save JSON report to file |
 | `--diff`, `--since-last` | Show only what changed since the last identical run |
+| `--notify <url>` | POST a summary of notable CVEs (critical/high or KEV) to a webhook; with `--diff`, only the delta is sent |
 | `-f`, `--format <table\|json\|csv\|md\|sarif>` | Output format (default `table`) |
 | `-q`, `--quiet` | Suppress decorative output |
 

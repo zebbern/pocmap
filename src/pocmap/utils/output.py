@@ -119,9 +119,14 @@ def render(
     """
     if fmt is OutputFormat.JSON:
         payload = json.dumps(data, indent=2, default=str)
-        # soft_wrap + no markup/highlight => the JSON is emitted byte-for-byte
-        # (no line wrapping at the console width, no ANSI, no ``[...]`` parsing).
-        console.print(payload, soft_wrap=True, markup=False, highlight=False)
+        # soft_wrap + no markup/highlight/emoji => the JSON is emitted byte-for-byte
+        # (no line wrapping at the console width, no ANSI, no ``[...]`` parsing, and
+        # no ``:shortcode:`` -> emoji substitution). ``emoji=False`` is load-bearing:
+        # CPE strings such as ``cpe:2.3:a:apple:xcode:*`` contain sequences Rich would
+        # otherwise replace, producing corrupt-but-still-parseable JSON.
+        console.print(
+            payload, soft_wrap=True, markup=False, highlight=False, emoji=False
+        )
         return
 
     if fmt is OutputFormat.CSV:

@@ -4,7 +4,7 @@ This document is designed specifically for AI agents (Claude, GPT, Cursor, etc.)
 
 ## Overview
 
-PocMap provides 19 MCP tools, 3 resources, and 3 prompts for comprehensive vulnerability intelligence. All tools return JSON strings for reliable programmatic parsing.
+PocMap provides 20 MCP tools, 3 resources, and 3 prompts for comprehensive vulnerability intelligence. All tools return JSON strings for reliable programmatic parsing.
 
 **When to use this toolkit:**
 - User asks about a specific CVE ID
@@ -37,30 +37,90 @@ Alternatives after `pip install "pocmap[server]"`: command `pocmap-mcp` (no args
 `python` with args `["-m", "pocmap.mcp_server"]`. See `README.md` → *AI Agent Integration*
 and `examples/mcp-config.json`.
 
+## Start here: one call instead of seven
+
+`generate_json_report(cve_ids)` is the default entry point for any question about known
+CVE IDs. It returns, for each CVE in one round trip:
+
+| | |
+|---|---|
+| `cve_info` | description, CVSS, EPSS, KEV status, CWEs, references, `affected_products` |
+| `exploits` | every source at once — GitHub PoCs, Metasploit, ExploitDB, Nuclei |
+| `labs` | Vulhub / HackTheBox / TryHackMe environments |
+| `bb_reports` | HackerOne / PentesterLand write-ups |
+
+That is the same information as `lookup_cve` + `find_github_pocs` +
+`find_metasploit_module` + `find_nuclei_template` + `check_kev_status` +
+`find_bug_bounty_reports` + `find_practice_labs`, which is **seven sequential round
+trips** — each one a separate inference turn — for data the server fetches concurrently
+anyway. It takes comma-separated IDs, so "which of these three should I patch first"
+is also a single call.
+
+Use the single-purpose tools when you genuinely need one source (the user asked
+specifically for Metasploit), when you are drilling into something the report surfaced,
+or when you have no CVE ID yet (`discover_product_cves`, `find_recent_exploits`).
+
 ## Available Tools and When to Use Each
 
 ### CVE Intelligence (3 tools)
 
 | Tool | When to Use | Key Output Fields |
 |------|-------------|-------------------|
-| `lookup_cve` | User mentions any CVE ID | `cve_id`, `description`, `cvss` (score, severity, version, vector_string), `epss_score`, `kev_status`, `cwes`, `vendor`, `product`, `state` |
+| `lookup_cve` | User mentions any CVE ID | `id` (the CVE identifier — `cve_id` appears only in the error envelope), `description`, `cvss` (score, severity, version, vector_string), `epss_score`, `kev_status`, `cwes`, `vendor`, `product`, `affected_products`, `state` |
 | `get_epss_score` | Prioritizing which CVEs to patch first | `epss_score` (0.0-1.0), `risk_level` (LOW/MEDIUM/HIGH/CRITICAL), `interpretation` |
 | `check_kev_status` | Determining if a CVE is actively exploited | `kev_status` (bool), `recommendation` (actionable) |
 
-**Decision rule:** Always call `lookup_cve` first when a CVE ID is mentioned. It provides the superset of information. Only call `get_epss_score` or `check_kev_status` individually if the user asks specifically about EPSS or KEV.
+**Decision rule:** For anything beyond "what is this CVE", start with **`generate_json_report`**
+— it returns CVE details *plus* exploits, labs and bug bounty reports in one round trip
+instead of seven (see [Start here](#start-here-one-call-instead-of-seven)). Use `lookup_cve`
+when you only need the CVE metadata itself; it is the cheapest call and provides the
+superset of the other two in this table. Only call `get_epss_score` or `check_kev_status`
+individually if the user asks specifically about EPSS or KEV.
 
 **Upstream-failure note:** On an upstream failure (throttle/offline/network), `get_epss_score` and `check_kev_status` now return the standard error envelope (`category` `rate_limited`/`offline`/`network_error` with a `retryable` flag), **not** `available: false` / `kev_status: false`. A genuine "no EPSS data" / "not in KEV" from a *successful* lookup still returns `available: false` / `kev_status: false`.
 
-### Exploit Discovery (4 tools)
+### Exploit Discovery (5 tools)
 
 | Tool | When to Use | Returns |
 |------|-------------|---------|
-| `find_github_pocs` | User wants exploit code, detection scripts, or to understand exploitation | List of repos with `source`, `url`, `title`, `language`, `stars`, `forks` |
-| `find_metasploit_module` | Assessing if reliable, weaponized exploit exists | Module `title`, `url`, `rank` |
-| `find_exploitdb_entry` | Finding standalone exploit scripts | Entry `title`, `url` |
-| `find_nuclei_template` | Detection/verification scanning needs | Template `title`, `url` |
+| `find_github_pocs` | User wants exploit code, detection scripts, or to understand exploitation | `cve_id`, `total_count`, `pocs` (repos with `source`, `url`, `title`, `language`, `stars`, `forks`), and `sources` (per-source health) |
+| `find_metasploit_module` | Assessing if reliable, weaponized exploit exists | Best-ranked `module`: `url` (Rapid7 page), `title` (module fullname), `rank`, `command` (msfconsole invocation) |
+| `find_exploitdb_entry` | Finding standalone exploit scripts | `entry`: `url`, `title` (path in the ExploitDB repo), `command` (searchsploit invocation) |
+| `find_nuclei_template` | Detection/verification scanning needs | `template`: `url` (ProjectDiscovery library), `title` (template path), `command` (nuclei invocation) |
+
+For the three database tools, `language`/`stars`/`forks` are always `null` — those are
+GitHub-repo metadata and these sources are not GitHub repos.
 
 **Decision rule:** Call all 4 when doing comprehensive exploit research. For quick checks, `find_github_pocs` is usually the most informative.
+
+**`limit` semantics:** each of the three database tools returns at most one entry (`limit`
+bounds how many entries *of that source* are considered). They are independent — a CVE
+having a Metasploit module no longer suppresses its ExploitDB entry or Nuclei template.
+
+**`find_github_pocs` and `limit`:** the limit is applied *before* per-repository metadata
+enrichment, which costs one GitHub API call each against an unauthenticated budget of 60
+per hour. Request only as many PoCs as you will actually use; a large `limit` on a
+popular CVE is the fastest way to a `rate_limited` envelope.
+
+Results are the union of the Nomi-sec and TrickestCVE indexes, deduped, with
+CVE-aggregator repos filtered out. **Trust the order.** Nomi-sec only indexes repos that
+name the CVE and carries real star counts, so its entries rank first; TrickestCVE is
+broader but includes repos that merely *mention* a CVE, and those sort last with
+`stars: 0` and `language: null`. Prefer the top of the list, and treat a zero-star,
+null-language entry as an unverified lead rather than a known PoC.
+
+**Verifying a PoC is real:** `find_github_pocs` returns *leads*. When it matters that a
+repository actually exploits the CVE — before telling a user "working exploit code
+exists", or when the results are low-star repos you cannot judge — call
+**`verify_github_pocs`**, which reads each repo's source and returns a verdict:
+`confirmed` (names the CVE in code AND ships code), `likely` (a writeup),
+`unverified` (has code but never names this CVE — unproven, not disproven), or
+`unrelated` (an index — judged by how many *distinct* CVEs the repo cites, since a PoC
+is about one vulnerability and a list is about dozens). Only `confirmed` claims the repo
+exploits the CVE;
+report the others as leads. It requires the operator to have set
+`POCMAP_ALLOW_FETCH_POC_SOURCE=1` (it writes exploit code to disk); if unset the tool
+returns an error saying so — surface that to the user instead of retrying.
 
 ### Bug Bounty Research (1 tool)
 
@@ -132,9 +192,25 @@ and `examples/mcp-config.json`.
   "publication_date": "2021-12-10",
   "state": "PUBLISHED",
   "ransomware_usage": null,
-  "rejected_reason": null
+  "rejected_reason": null,
+  "affected_products": [
+    {"vendor": "apache", "product": "log4j"},
+    {"vendor": "fedoraproject", "product": "fedora"}
+  ]
 }
 ```
+
+**`vendor`/`product` are only the first of `affected_products`.** A CVE is normally filed
+against several `(vendor, product)` pairs — the vulnerable component plus every
+distribution that shipped it. When answering "does this CVE affect *X*?", check the whole
+`affected_products` list, not the scalar fields.
+
+The Python API additionally exposes `affected_cpes` (raw CPE 2.3 strings) and
+`cpe_matches` (applicability statements with `version_start_including` /
+`version_end_excluding` bounds) on `CVEInfo`. The MCP normalizer drops both, so they are
+absent from `lookup_cve` and `discover_product_cves` — the one exception is
+`find_recent_exploits`, whose nested `cve_info` is a raw model dump and does carry them.
+To reason about version applicability, use `discover_product_cves`, which evaluates it for you.
 
 ### Exploit
 ```json
@@ -145,9 +221,14 @@ and `examples/mcp-config.json`.
   "language": "Python",
   "stars": 1250,
   "forks": 340,
-  "rank": null
+  "rank": null,
+  "command": null
 }
 ```
+
+`rank` is set only for Metasploit modules; `command` only for the Metasploit / ExploitDB /
+Nuclei sources (`msfconsole …` / `searchsploit -m …` / `nuclei -t …`). For a GitHub PoC both
+are `null`; conversely `language`/`stars`/`forks` are `null` for every non-GitHub source.
 
 ### LabEnvironment
 ```json
@@ -158,6 +239,10 @@ and `examples/mcp-config.json`.
   "setup_instructions": "docker compose up -d"
 }
 ```
+
+`platform` is always lowercase (`hackthebox`, `tryhackme`, `vulhub`, `other`) — match on that
+form. `find_practice_labs` returns only `{platform, name, url}`; `setup_instructions` is a
+Python-model field, so use `find_vulhub_docker` for Docker setup steps over MCP.
 
 ### BugBountyReport
 ```json
@@ -186,34 +271,26 @@ and `examples/mcp-config.json`.
 User: "Tell me about CVE-2021-44228"
 
 Agent steps:
-1. lookup_cve("CVE-2021-44228")
-   -> Extract: CVSS 10.0 CRITICAL, EPSS 0.9753, KEV=true
+1. generate_json_report("CVE-2021-44228")     <- ONE call, not seven
 
-2. find_github_pocs("CVE-2021-44228", limit=5)
-   -> Extract: Top repos, languages, star counts
-
-3. find_metasploit_module("CVE-2021-44228")
-   -> Check if weaponized exploit exists
-
-4. find_nuclei_template("CVE-2021-44228")
-   -> Check if detection template exists
-
-5. check_kev_status("CVE-2021-44228")
-   -> Confirm KEV status (should match lookup_cve)
-
-6. find_bug_bounty_reports("CVE-2021-44228")
-   -> Find real-world exploitation reports
-
-7. find_practice_labs("CVE-2021-44228")
-   -> List available practice environments
+   entries[0].cve_info   -> CVSS 10.0 CRITICAL, EPSS 0.9999, KEV=true, CWEs, references
+   entries[0].exploits   -> GitHub PoCs (stars/language) + Metasploit + ExploitDB + Nuclei
+   entries[0].labs       -> Vulhub / HackTheBox / TryHackMe environments
+   entries[0].bb_reports -> HackerOne / PentesterLand write-ups
 
 Response synthesis:
 - Provide summary with CVSS, EPSS, KEV status
-- List top 3-5 GitHub PoCs with links
-- Note Metasploit/Nuclei availability
+- List top 3-5 GitHub PoCs with links (exploits[] where source == "github",
+  already sorted by stars — prefer the top; a zero-star, null-language entry is
+  an unverified lead, not a known PoC)
+- Note Metasploit/Nuclei availability (source == "metasploit" / "nuclei";
+  each carries a ready-to-run `command`)
 - Summarize bug bounty findings
 - List practice lab options
 - Give clear prioritization recommendation (CRITICAL + KEV = patch immediately)
+
+Only follow up with a single-purpose tool if the report left a gap you actually
+need — e.g. find_github_pocs("CVE-2021-44228", limit=20) for a wider PoC sweep.
 ```
 
 ### Workflow 2: Vulnerability Prioritization
@@ -221,17 +298,21 @@ Response synthesis:
 User: "Which of these should I patch first? CVE-2021-44228, CVE-2023-38408, CVE-2024-21413"
 
 Agent steps:
-1. lookup_cve for all 3 (can be parallelized conceptually)
-2. get_epss_score for all 3
-3. check_kev_status for all 3
-4. find_github_pocs for all 3 (to count exploit availability)
+1. generate_json_report("CVE-2021-44228,CVE-2023-38408,CVE-2024-21413")
 
-Scoring logic:
+   One call. Each entry carries the CVSS, EPSS and KEV needed to rank, plus the
+   exploit list whose length is the "how available is this" signal — no separate
+   get_epss_score / check_kev_status / find_github_pocs passes.
+
+Scoring logic (note: cve_info.epss_score is 0.0-1.0):
 - EPSS > 0.9 AND KEV=true: Patch within 24 hours
 - EPSS > 0.5 AND KEV=true: Patch within 48 hours
 - CVSS >= 9.0: Patch within 1 week
 - EPSS > 0.5: Patch within 2 weeks
 - Otherwise: Standard patch cycle
+
+Check `total_errors` / `errors[]` before ranking: a CVE that failed to fetch must
+be reported as unknown, never silently ranked last.
 
 Response: Ordered list with justification for each rank
 ```
@@ -261,20 +342,18 @@ User: "I'm hunting on a program using Apache Log4j. What should I check?"
 
 Agent steps:
 1. cpe_to_cve("cpe:2.3:a:apache:log4j")
-   -> All Log4j CVEs
+   -> All Log4j CVE ids
 
-2. Filter by high CVSS (>= 7.0) and available exploits
+2. generate_json_report("<comma-joined ids, highest-value first>")
+   -> Full details, exploit techniques, past bug bounty findings and practice
+      labs for the whole batch in one call (the old steps 2-3, which were four
+      tools per CVE). Cap the id list to the ones you will actually discuss.
 
-3. For each high-value CVE:
-   - lookup_cve for full details
-   - find_github_pocs for exploit techniques
-   - find_bug_bounty_reports for past findings
-   - find_practice_labs for skill building
+3. get_bug_bounty_playbook()
+   -> Structured submission workflow (local data; independent of step 2, so
+      issue both together)
 
-4. get_bug_bounty_playbook()
-   -> Structured submission workflow
-
-5. Suggest using the bb-submission playbook for report writing
+4. Suggest using the bb-submission playbook for report writing
 
 Response: Targeted CVE list + exploitation roadmap + playbook guidance
 ```
@@ -283,27 +362,18 @@ Response: Targeted CVE list + exploitation roadmap + playbook guidance
 ```
 User: "CVE-2024-XXXXX just dropped and it's critical. What do I do?"
 
-Agent steps:
-1. lookup_cve("CVE-2024-XXXXX")
-   -> Confirm severity and details
+Agent steps (2 calls, and they are independent — issue them together):
+1. generate_json_report("CVE-2024-XXXXX")
+   -> Severity, KEV, EPSS, exploit availability across all four sources,
+      and a lab to reproduce in. Covers steps 1, 3, 4, 5 and 7 of the old
+      seven-step version.
 
 2. get_rapid_response_playbook()
-   -> Get emergency workflow
+   -> Emergency workflow (pure local data, no network)
 
-3. check_kev_status("CVE-2024-XXXXX")
-   -> Check if already exploited
-
-4. get_epss_score("CVE-2024-XXXXX")
-   -> Assess exploitation probability
-
-5. find_github_pocs + find_metasploit_module + find_nuclei_template
-   -> Check exploit availability
-
-6. cve_to_cpe("CVE-2024-XXXXX")
-   -> Identify affected products in environment
-
-7. find_vulhub_docker or find_practice_labs
-   -> Set up test environment
+Then, only if you need to scope blast radius in the user's estate:
+3. cve_to_cpe("CVE-2024-XXXXX")
+   -> Affected product configurations to match against inventory
 
 Response: Time-bounded action items from playbook + immediate containment steps
 ```
@@ -331,22 +401,22 @@ Response: Prioritized list with CVSS, EPSS, KEV status, exploit availability, an
 ```
 User: "We're running Apache Struts 2.5 - what vulnerabilities should we worry about?"
 
-Agent steps:
+Agent steps (2 calls total, not 1 + 7-per-CVE):
 1. discover_product_cves(product="Apache Struts", version="2.5")
-   -> Get CVEs grouped by confidence (confirmed, possibly, unknown)
+   -> CVEs grouped by confidence (confirmed, possibly, not_enough_data).
+      Check `search_sources`: "nvd_cpe_match" is authoritative;
+      "nvd_keyword_search" means the product could not be resolved to a CPE,
+      so say so rather than presenting the tiers as fact.
+      Each CVE already carries full details (CVSS, EPSS, KEV, description) —
+      there is no need to lookup_cve them again.
 
-2. For confirmed CVEs:
-   - lookup_cve for full details (CVSS, EPSS, description)
-   - get_epss_score for prioritization
-   - check_kev_status for active exploitation
-   - find_github_pocs to count available exploits
+2. generate_json_report("<comma-joined confirmed CVE ids>")
+   -> Exploit availability across all four sources, labs and bug bounty
+      reports for the whole set, in one call. Covers what the old steps 2-4
+      did with seven calls per CVE.
 
-3. For high-confidence CVEs (CRITICAL/HIGH + KEV or EPSS > 50):
-   - find_metasploit_module + find_nuclei_template for detection
-   - find_practice_labs for testing environments
-
-4. generate_json_report(confirmed_cve_ids)
-   -> Produce consolidated audit report
+Prioritize on cve_info.epss_score (0.0-1.0) + kev_status + CVSS, and use
+len(entries[].exploits) as the exploit-availability signal.
 
 Response: Summary table of confirmed CVEs with CVSS, EPSS, KEV, exploit count, and prioritized remediation order
 ```
@@ -377,7 +447,7 @@ All MCP tools return JSON error objects with these fields:
 {
   "error": "Description of what went wrong",
   "error_type": "ExceptionClassName",
-  "category": "rate_limited|offline|network_error|not_found|invalid_input|permission_error|unknown",
+  "category": "rate_limited|offline|network_error|not_found|invalid_input|permission_error|not_enabled|unknown",
   "retryable": true,
   "context": "Tool name and arguments"
 }
@@ -394,6 +464,7 @@ All MCP tools return JSON error objects with these fields:
 | `not_found` | CVE doesn't exist in database | Inform user the CVE may not be published yet |
 | `invalid_input` | Malformed CVE ID or bad parameter | Correct the input (e.g., `CVE-2021-44228` not `CVE202144228`) |
 | `permission_error` | Auth failure or forbidden access | Suggest checking GITHUB_API_TOKEN / NVD_API_KEY validity |
+| `not_enabled` + `retryable: false` | An opt-in capability is switched off (currently only `verify_github_pocs`) | Relay the `remediation` field to the user and stop; do not retry until they confirm they enabled it |
 | `unknown` | Unexpected error | Log details and try alternative tool |
 
 ### CVE ID Validation
@@ -451,25 +522,41 @@ Find recently published CVEs with exploit and PoC intelligence. Scans the NVD fo
   "query": { "since": "24h", "severity": ["CRITICAL"], ... },
   "cves": [
     {
-      "cve_id": "CVE-2024-XXXXX",
-      "description": "...",
-      "severity": "CRITICAL",
-      "base_score": 9.8,
-      "epss": 85.4,
-      "kev_status": true,
-      "vendor": "Apache",
-      "product": "Struts",
-      "publication_date": "2024-01-15",
+      "cve_info": {
+        "id": "CVE-2024-XXXXX",
+        "description": "...",
+        "cvss": { "version": "3.1", "base_score": 9.8, "severity": "CRITICAL",
+                  "vector_string": "CVSS:3.1/AV:N/..." },
+        "epss": 85.4,
+        "kev_status": true,
+        "cwes": [],
+        "references": { "NVD": "https://nvd.nist.gov/..." },
+        "vendor": "Apache",
+        "product": "Struts",
+        "publication_date": "2024-01-15",
+        "state": "PUBLISHED",
+        "affected_products": [], "affected_cpes": [], "cpe_matches": []
+      },
       "has_poc": true,
-      "poc_sources": ["github"]
+      "poc_sources": ["github"],
+      "discovered_at": "2024-01-16T09:30:00"
     }
   ]
 }
 ```
 
+**The CVE fields are nested under `cve_info`** — nothing is hoisted to the item's top level.
+This is also the one tool that returns the **raw** `CVEInfo` dump rather than the normalized
+shape, so within `cve_info` the score is `cvss.base_score` (not `cvss.score`), the EPSS key
+is `epss` on the **0-100** scale (not `epss_score` on 0.0-1.0), `references` is a name->URL
+object (not a list), and `affected_cpes`/`cpe_matches` are present. On failure the tool
+returns `{"success": false, "error": "..."}`.
+
 ### `discover_product_cves`
 
-Discover CVEs affecting a product by name and version. Supports product aliases, version wildcards, and fuzzy matching.
+Discover CVEs affecting a product by name and version. The product name is resolved
+through the NVD CPE dictionary to canonical `vendor:product` identifiers, then CVEs are
+fetched by CPE applicability match with the version constraint evaluated by NVD.
 
 **Parameters:**
 
@@ -488,12 +575,26 @@ Discover CVEs affecting a product by name and version. Supports product aliases,
   "normalized_product": "apache struts",
   "version_constraint": { "major": 2, "minor": "x", "patch": null, "range_op": null, "raw": "2.x", "is_wildcard": true },
   "total_found": 42,
+  "search_sources": ["nvd_cpe_match"],
+  "matched_cpes": ["cpe:2.3:*:apache:struts"],
   "confirmed_affected": [ ... ],
   "possibly_affected": [ ... ],
   "not_enough_data": [ ... ],
   "summary": { "confirmed_count": 15, "possibly_count": 20, "unknown_count": 7 }
 }
 ```
+
+**Check `search_sources` before trusting the tiers.** It reports how the CVEs were found:
+
+| Value | `matched_cpes` | How to read the result |
+|-------|----------------|------------------------|
+| `nvd_cpe_match` | the resolved CPE prefixes | Authoritative. The CVEs genuinely list this product in their applicability data. |
+| `nvd_keyword_search` | empty | Degraded fallback — the product could not be resolved to any CPE, so this is a full-text search over CVE *descriptions*. Expect both false positives and misses; say so when reporting to the user. |
+
+**Rate limits.** One dictionary lookup plus one query per resolved `vendor:product` pair
+(capped at 5). Unauthenticated NVD allows 5 requests / 30s, so `discover_product_cves`
+is the most `NVD_API_KEY`-sensitive tool; a `rate_limited` envelope here usually means
+the key is missing rather than that the product is unknown.
 
 ### Version Constraint Format Reference
 
@@ -544,7 +645,7 @@ paths = export_schemas("./schemas")
 | File | Primary Model | Key Fields |
 |------|---------------|------------|
 | `CVSSScore.json` | CVSSScore | `version` (enum), `base_score` (0-10), `severity` (enum), `vector_string` |
-| `CVEInfo.json` | CVEInfo | `id`, `description`, `cvss`, `epss`, `kev_status`, `cwes`, `references`, `vendor`, `product`, `state` |
+| `CVEInfo.json` | CVEInfo | `id`, `description`, `cvss`, `epss`, `kev_status`, `cwes`, `references`, `vendor`, `product`, `state`, `affected_products`, `cpe_matches` |
 | `Exploit.json` | Exploit | `source` (enum), `url`, `title`, `language`, `stars`, `forks`, `rank`, `command` |
 | `LabEnvironment.json` | LabEnvironment | `platform` (enum), `name`, `url`, `setup_instructions` |
 | `BugBountyReport.json` | BugBountyReport | `source` (enum), `url`, `has_poc`, `title` |
@@ -553,7 +654,7 @@ paths = export_schemas("./schemas")
 | `ReportEntry.json` | ReportEntry | `cve_info`, `exploits`, `labs`, `bb_reports`, `generated_at` |
 | `MultiReport.json` | MultiReport | `entries` (dict of CVE ID -> ReportEntry), `generated_at` |
 | `VersionConstraint.json` | VersionConstraint | `major`, `minor`, `patch`, `range_op`, `raw`, `is_wildcard` |
-| `ProductDiscoveryResult.json` | ProductDiscoveryResult | `query`, `normalized_vendor`, `normalized_product`, `version_constraint`, `confirmed_affected`, `possibly_affected`, `not_enough_data`, `total_found`, `search_sources` |
+| `ProductDiscoveryResult.json` | ProductDiscoveryResult | `query`, `normalized_vendor`, `normalized_product`, `version_constraint`, `confirmed_affected`, `possibly_affected`, `not_enough_data`, `total_found`, `search_sources`, `matched_cpes` |
 
 ### Enum Values Reference
 
@@ -581,8 +682,8 @@ Provide these schema files to your AI agent at initialization so it understands:
 Example system prompt addition:
 ```
 You have access to vulnerability intelligence tools. The data models use these schemas:
-- CVEInfo: {cve_id, description, cvss: {base_score, severity, version, vector_string}, epss, kev_status, cwes, references, vendor, product}
-- Exploit: {source, url, title, language, stars, forks, command}
+- CVEInfo: {id, description, cvss: {base_score, severity, version, vector_string}, epss, kev_status, cwes, references, vendor, product, affected_products}
+- Exploit: {source, url, title, language, stars, forks, rank, command}
 - LabEnvironment: {platform, name, url, setup_instructions}
 - BugBountyReport: {source, url, has_poc, title}
 ```
@@ -650,4 +751,4 @@ When the MCP client supports resources, use these URI patterns:
 
 - MCP server implementation lives in `src/pocmap/mcp_server.py`, exposed as the `pocmap-mcp` console script and `python -m pocmap.mcp_server`; repo-root `mcp_server.py` is a thin launcher shim.
 - Do not target a top-level `mcp_server` module for the console script — that name collides with unrelated site-packages; use `pocmap.mcp_server:main`.
-- The `[server]` extra depends on FastMCP via `mcp.server.fastmcp`; `mcp` 2.x removes that path, so keep an upper bound (`mcp>=1.2,<2`) until the server is migrated.
+- The `[server]` extra requires `mcp>=2.0,<3` and builds on `mcp.server.mcpserver.MCPServer` (the 2.x rename of `FastMCP`). The server reports protocol `2026-07-28`; host/port moved off the constructor onto `run()`, since the protocol core is now stateless.

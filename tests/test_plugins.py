@@ -122,7 +122,7 @@ def _make_service(
     """Build an ExploitService with injected plugins and offline built-ins."""
     monkeypatch.setattr(es_mod, "_load_exploit_source_plugins", lambda: list(plugins))
     svc = ExploitService()
-    monkeypatch.setattr(svc._github, "search_pocs", lambda cve_id: list(github or []))
+    monkeypatch.setattr(svc._github, "search_pocs", lambda cve_id, limit=None: list(github or []))
     monkeypatch.setattr(svc._exploits, "search_all", lambda cve_id: list(db or []))
     return svc
 

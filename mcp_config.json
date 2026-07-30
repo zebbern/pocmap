@@ -1,6 +1,6 @@
 {
   "name": "PocMap",
-  "version": "2.2.0",
+  "version": "2.4.0",
   "description": "MCP Server for CVE lookup, exploit discovery, and vulnerability reporting. Enables AI agents to search for CVE details, find PoCs from GitHub/Metasploit/ExploitDB/Nuclei, discover bug bounty reports, find CTF labs, and generate vulnerability reports.",
   "author": "PocMap Team",
   "license": "MIT",
@@ -89,7 +89,7 @@
       "description": "Find a Metasploit module for a CVE",
       "input_schema": {
         "cve_id": "string - The CVE identifier",
-        "limit": "integer - Max results (1-10, default: 1)"
+        "limit": "integer - How many entries OF THAT SOURCE to consider (1-10, default: 1); at most one is returned"
       },
       "output_schema": "string - Metasploit module info or not-found message"
     },
@@ -97,7 +97,7 @@
       "description": "Find an ExploitDB entry for a CVE",
       "input_schema": {
         "cve_id": "string - The CVE identifier",
-        "limit": "integer - Max results (1-10, default: 1)"
+        "limit": "integer - How many entries OF THAT SOURCE to consider (1-10, default: 1); at most one is returned"
       },
       "output_schema": "string - ExploitDB entry info or not-found message"
     },
@@ -105,7 +105,7 @@
       "description": "Find a Nuclei vulnerability scanner template for a CVE",
       "input_schema": {
         "cve_id": "string - The CVE identifier",
-        "limit": "integer - Max results (1-10, default: 1)"
+        "limit": "integer - How many entries OF THAT SOURCE to consider (1-10, default: 1); at most one is returned"
       },
       "output_schema": "string - Nuclei template info or not-found message"
     },
@@ -159,14 +159,14 @@
       "output_schema": "string - HTML-formatted vulnerability report"
     },
     "discover_product_cves": {
-      "description": "Discover CVEs affecting a product by name and version (supports aliases)",
+      "description": "Discover CVEs affecting a product by name and version. Resolves the product to canonical vendor:product CPEs via the NVD CPE dictionary, then matches CVEs by CPE applicability with the version constraint evaluated by NVD; falls back to keyword search only if unresolvable.",
       "input_schema": {
         "product": "string - Product name (e.g. 'Apache Struts'); aliases supported",
         "version": "string - Optional version filter (e.g. '2.x', '2.14.1')",
         "vendor": "string - Optional vendor name for disambiguation",
         "limit": "integer - Max CVEs to analyze (default: 50)"
       },
-      "output_schema": "string - CVEs grouped into confirmed/possibly-affected/not-enough-data"
+      "output_schema": "string - CVEs grouped into confirmed/possibly-affected/not-enough-data, plus search_sources (nvd_cpe_match = authoritative, nvd_keyword_search = degraded full-text fallback) and matched_cpes"
     },
     "find_recent_exploits": {
       "description": "Discover recently published CVEs with exploit intelligence and filters",
@@ -218,7 +218,7 @@
   },
   "dependencies": {
     "python": ">=3.10",
-    "packages": ["pocmap[server]", "mcp>=1.2", "pydantic>=2.0.0"],
+    "packages": ["pocmap[server]", "mcp>=2.0,<3", "pydantic>=2.0.0"],
     "install": "pip install \"pocmap[server]\"  # or: uvx --from pocmap[server] pocmap-mcp"
   }
 }

@@ -30,8 +30,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
+from pocmap import __version__
 from pocmap.models import ExploitSource, LabPlatform
 from pocmap.services.bb_service import BugBountyService
 from pocmap.services.cve_service import CVEService
@@ -345,14 +346,38 @@ class ServiceAdapter:
             "sources": [s.to_dict() for s in result.sources],
         }
 
+    def verify_github_pocs(self, cve_id: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Fetch and score the top PoCs' source (opt-in; see the tool docs).
+
+        Rows are already plain dicts, so no normalizer is needed. Failures are
+        deliberately NOT swallowed here: the common one is the operator not
+        having opted in, which the agent must report rather than read as
+        "no PoCs could be verified".
+        """
+        return self._exploit.verify_github_pocs(cve_id, limit=limit)
+
+    def _find_db_exploit(
+        self, cve_id: str, source: ExploitSource, limit: int
+    ) -> dict[str, Any] | None:
+        """First exploit from *source*, or *None*.
+
+        ``limit`` bounds how many entries **of that source** are considered.
+        It used to slice the combined db-exploit list before filtering, and
+        because that list is ordered [metasploit, exploitdb, nuclei], the
+        default ``limit=1`` made ``find_exploitdb_entry`` and
+        ``find_nuclei_template`` return ``None`` for every CVE that happened to
+        have a Metasploit module.
+        """
+        exploits = self._exploit.find_db_exploits(cve_id)
+        matching = [e for e in exploits if e.source == source]
+        for e in matching[: max(limit, 1)]:
+            return self._normalize_exploit(e)
+        return None
+
     def find_metasploit_module(self, cve_id: str, limit: int = 1) -> dict[str, Any] | None:
         """Find Metasploit module."""
         try:
-            exploits = self._exploit.find_db_exploits(cve_id)
-            for e in exploits[:limit]:
-                if e.source == ExploitSource.METASPLOIT:
-                    return self._normalize_exploit(e)
-            return None
+            return self._find_db_exploit(cve_id, ExploitSource.METASPLOIT, limit)
         except Exception as e:
             if is_programming_error(e):
                 raise
@@ -362,11 +387,7 @@ class ServiceAdapter:
     def find_exploitdb_entry(self, cve_id: str, limit: int = 1) -> dict[str, Any] | None:
         """Find ExploitDB entry."""
         try:
-            exploits = self._exploit.find_db_exploits(cve_id)
-            for e in exploits[:limit]:
-                if e.source == ExploitSource.EXPLOITDB:
-                    return self._normalize_exploit(e)
-            return None
+            return self._find_db_exploit(cve_id, ExploitSource.EXPLOITDB, limit)
         except Exception as e:
             if is_programming_error(e):
                 raise
@@ -376,11 +397,7 @@ class ServiceAdapter:
     def find_nuclei_template(self, cve_id: str, limit: int = 1) -> dict[str, Any] | None:
         """Find Nuclei template."""
         try:
-            exploits = self._exploit.find_db_exploits(cve_id)
-            for e in exploits[:limit]:
-                if e.source == ExploitSource.NUCLEI:
-                    return self._normalize_exploit(e)
-            return None
+            return self._find_db_exploit(cve_id, ExploitSource.NUCLEI, limit)
         except Exception as e:
             if is_programming_error(e):
                 raise
@@ -696,6 +713,17 @@ class ServiceAdapter:
         else:
             ref_list = list(refs) if refs else []
 
+        # Every (vendor, product) pair the CVE is filed under. ``vendor``/
+        # ``product`` above are only the first of these, so a product-scoped
+        # question ("does this affect nginx?") needs the full list: a CVE
+        # typically names the vulnerable component plus every distro that
+        # shipped it. The verbose ``cpe_matches`` stay Python-API-only.
+        affected_products = [
+            {"vendor": ap.vendor, "product": ap.product}
+            for ap in getattr(info, "affected_products", [])
+            if getattr(ap, "vendor", None) or getattr(ap, "product", None)
+        ]
+
         return {
             "id": cve_id,
             "description": getattr(info, "description", None),
@@ -706,6 +734,7 @@ class ServiceAdapter:
             "references": ref_list,
             "vendor": getattr(info, "vendor", None),
             "product": getattr(info, "product", None),
+            "affected_products": affected_products,
             "publication_date": getattr(info, "publication_date", None),
             "state": ServiceAdapter._enum_val(getattr(info, "state", "UNKNOWN"), "UNKNOWN"),
         }
@@ -725,6 +754,10 @@ class ServiceAdapter:
             "stars": getattr(e, "stars", None),
             "forks": getattr(e, "forks", None),
             "rank": ServiceAdapter._enum_val(getattr(e, "rank", None)) if getattr(e, "rank", None) is not None else None,
+            # Populated by Exploit.from_metasploit/from_exploitdb/from_nuclei
+            # (msfconsole / searchsploit / nuclei invocations); None for GitHub
+            # PoCs, which have no canonical run command.
+            "command": getattr(e, "command", None),
         }
 
     @staticmethod
@@ -813,7 +846,11 @@ class ServiceAdapter:
             "normalized_product": getattr(r, "normalized_product", None),
             "version_constraint": vc_dict,
             "total_found": getattr(r, "total_found", 0),
+            # ``nvd_cpe_match`` = resolved to canonical CPEs (authoritative);
+            # ``nvd_keyword_search`` = unresolvable product, noisy full-text
+            # fallback. Agents should weigh the latter's results accordingly.
             "search_sources": list(getattr(r, "search_sources", [])),
+            "matched_cpes": list(getattr(r, "matched_cpes", [])),
             "confirmed_affected": confirmed,
             "possibly_affected": possibly,
             "not_enough_data": unknown,
@@ -836,7 +873,7 @@ _svc = ServiceAdapter()
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
-async def app_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
+async def app_lifespan(server: MCPServer) -> AsyncIterator[dict[str, Any]]:
     """Manage application lifecycle."""
     logger.info("PocMap MCP Server starting up...")
     yield {"services": _svc}
@@ -845,10 +882,10 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# FastMCP Server
+# MCP Server
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP(
+mcp = MCPServer(
     "PocMap",
     instructions=(
         "You are an AI security assistant with access to the PocMap toolkit. "
@@ -862,8 +899,10 @@ mcp = FastMCP(
         "CVSS scores, EPSS scores, KEV status, available exploits, and practice environments."
     ),
     lifespan=app_lifespan,
-    host="127.0.0.1",
-    port=8000,
+    # Bind address is no longer constructor state: the 2026-07-28 protocol core
+    # is stateless, so host/port belong to the transport and are passed to
+    # ``run()`` by :func:`main`. STDIO (the default) takes neither.
+    version=__version__,
 )
 
 
@@ -1121,6 +1160,72 @@ def find_github_pocs(cve_id: str, limit: int = 10) -> str:
 
 
 @mcp.tool(
+    name="verify_github_pocs",
+    description=(
+        "Read the SOURCE of the top GitHub PoC repositories for a CVE and report what "
+        "each one actually contains, instead of trusting that a repo which mentions a "
+        "CVE exploits it. Use this when it matters that a PoC is real — before telling "
+        "a user 'working exploit code exists', or when find_github_pocs returned "
+        "low-star results you cannot judge. Each repo gets a verdict: 'confirmed' (names "
+        "the CVE in code AND ships runnable code), 'likely' (a writeup, no code), "
+        "'unverified' (has code but never names this CVE — unproven, not disproven), or "
+        "'unrelated' (an awesome-list / notes index). Only 'confirmed' claims the repo "
+        "exploits the CVE. Also returns the language derived from file extensions, with "
+        "no GitHub API calls. "
+        "REQUIRES the operator to have set POCMAP_ALLOW_FETCH_POC_SOURCE=1, because it "
+        "downloads third-party exploit code to disk; if unset the tool returns an error "
+        "saying so — report that to the user rather than retrying."
+    ),
+)
+def verify_github_pocs(cve_id: str, limit: int = 5) -> str:
+    """Fetch and score the source of a CVE's top GitHub PoCs.
+
+    Args:
+        cve_id: The CVE identifier
+        limit: How many top-ranked PoCs to fetch and score (1-20, default: 5)
+
+    Returns:
+        JSON string with cve_id, total_count, and a ``pocs`` list ordered
+        best-evidence-first. Each entry has url/title/stars/language plus an
+        ``evidence`` block (verdict, mentions_cve, mentions_cve_in_code,
+        code_files, doc_files, matched_paths) or an ``error`` when that
+        repository could not be fetched.
+    """
+    from pocmap.clients.codeload_client import PoCSourceDisabledError
+
+    try:
+        limit = max(1, min(20, limit))
+        rows = _svc.verify_github_pocs(cve_id, limit)
+        return _ok({
+            "cve_id": cve_id.upper().strip(),
+            "total_count": len(rows),
+            "pocs": rows,
+        })
+    except PoCSourceDisabledError as e:
+        # Not a failure to report generically: the message IS the remediation,
+        # and it contains no internals worth withholding. The generic envelope
+        # would tell the agent only "unknown error", leaving it unable to say
+        # what the user must do.
+        logger.info("verify_github_pocs called without the opt-in flag")
+        return json.dumps({
+            "error": str(e),
+            "error_type": "PoCSourceDisabledError",
+            "category": "not_enabled",
+            "retryable": False,
+            "remediation": (
+                "Ask the user to set POCMAP_ALLOW_FETCH_POC_SOURCE=1 and restart the "
+                "MCP server. It is off by default because verifying downloads "
+                "third-party exploit code to disk, which endpoint protection may "
+                "quarantine — an isolated VM or research host is the intended "
+                "environment. Do not retry until they confirm they have enabled it."
+            ),
+            "context": f"verify_github_pocs({cve_id})",
+        })
+    except Exception as e:
+        return _tool_error(e, f"verify_github_pocs({cve_id})")
+
+
+@mcp.tool(
     name="find_metasploit_module",
     description=(
         "Find a Metasploit Framework module for a CVE. "
@@ -1140,7 +1245,8 @@ def find_metasploit_module(cve_id: str, limit: int = 1) -> str:
 
     Returns:
         JSON string with cve_id, found (bool), and module details
-        (source, title, url) when available.
+        (source, url, title, rank, command -- the msfconsole invocation)
+        when available.
     """
     try:
         limit = max(1, min(10, limit))
@@ -1180,7 +1286,8 @@ def find_exploitdb_entry(cve_id: str, limit: int = 1) -> str:
 
     Returns:
         JSON string with cve_id, found (bool), and entry details
-        (source, title, url) when available.
+        (source, url, title, command -- the searchsploit invocation)
+        when available.
     """
     try:
         limit = max(1, min(10, limit))
@@ -1221,7 +1328,8 @@ def find_nuclei_template(cve_id: str, limit: int = 1) -> str:
 
     Returns:
         JSON string with cve_id, found (bool), and template details
-        (source, title, url) when available.
+        (source, url, title, command -- the nuclei invocation) when
+        available.
     """
     try:
         limit = max(1, min(10, limit))
@@ -1501,13 +1609,17 @@ def discover_product_cves(
 @mcp.tool(
     name="generate_json_report",
     description=(
-        "Generate a comprehensive JSON vulnerability report for one or more CVEs. "
-        "The report includes CVE details (description, CVSS, EPSS, KEV status), all discovered "
-        "exploits and PoCs, available practice labs, and bug bounty reports. "
-        "The JSON format is suitable for programmatic processing, CI/CD pipelines, and "
-        "integration with other security tools. "
-        "Use this tool when you need structured data for automation, vulnerability management "
-        "platforms, or security dashboards."
+        "START HERE for any question about one or more known CVE IDs. Returns everything "
+        "the individual tools return, in a single call: CVE details (description, CVSS, "
+        "EPSS, KEV status), every discovered exploit and PoC across GitHub, Metasploit, "
+        "ExploitDB and Nuclei, practice labs, and bug bounty reports. "
+        "Prefer this over calling lookup_cve + find_github_pocs + find_metasploit_module + "
+        "find_nuclei_template + check_kev_status + find_bug_bounty_reports + "
+        "find_practice_labs separately — it is one round trip instead of seven, and the "
+        "sources are fetched concurrently server-side. "
+        "Accepts comma-separated IDs, so it also answers 'compare/prioritize these CVEs' "
+        "in one call. Reach for the single-purpose tools afterwards only to drill into a "
+        "specific source. Also suitable for automation, CI/CD, and dashboards."
     ),
 )
 def generate_json_report(cve_ids: str) -> str:
@@ -1630,10 +1742,15 @@ def find_recent_exploits(
         limit: Maximum number of results (1--100, default: 50).
 
     Returns:
-        JSON string with query parameters and a list of CVE objects,
-        each containing cve_id, description, severity, base_score,
-        epss, kev_status, vendor, product, publication_date, has_poc,
-        and poc_sources.
+        JSON string with success (bool), total (int), query (the echoed
+        filter parameters), and cves -- a list of objects each shaped
+        {cve_info, has_poc, poc_sources, discovered_at}. The CVE fields
+        are nested under ``cve_info``, not hoisted to the top of each
+        item. Unlike ``lookup_cve``, ``cve_info`` here is the raw CVEInfo
+        model dump: ``cvss`` uses ``base_score`` (not ``score``), the
+        score is ``epss`` on the 0--100 scale (not ``epss_score`` on
+        0.0--1.0), ``references`` is a name->URL mapping (not a list),
+        and ``affected_cpes``/``cpe_matches`` are included.
     """
     try:
         limit = max(1, min(100, limit))
@@ -2012,9 +2129,17 @@ Examples:
 
     logger.info("Starting PocMap MCP Server with %s transport", args.transport)
 
-    mcp.host = args.host
-    mcp.port = args.port
-    mcp.run(transport=args.transport)
+    # ``--transport http`` is the user-facing spelling; the SDK calls it
+    # "streamable-http". Passing the CLI value straight through raised
+    # ``ValueError: Unknown transport: http``, so the documented HTTP transport
+    # never actually started.
+    transport = "streamable-http" if args.transport == "http" else args.transport
+
+    if transport == "stdio":
+        # STDIO has no bind address; passing host/port would be a TypeError.
+        mcp.run(transport="stdio")
+    else:
+        mcp.run(transport=transport, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

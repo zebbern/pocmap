@@ -6,7 +6,7 @@ This file covers how to **develop** the project. For how AI agents **consume** t
 
 ## Commands
 - Install (PyPI): `pip install "pocmap[server]"` (omit `[server]` for CLI-only)
-- Install (dev clone): `pip install -e ".[server,dev]"` (pytest, mypy, ruff + FastMCP)
+- Install (dev clone): `pip install -e ".[server,dev]"` (pytest, mypy, ruff + the MCP SDK)
 - Run CLI: `pocmap lookup CVE-2021-44228`  (or `python -m pocmap ...`); full command list: `python -m pocmap --help`
 - Lint: `ruff check src/pocmap`
 - Type check: `mypy src/pocmap`   (strict mode is on in `pyproject.toml`; `pocmap.mcp_server` is excluded)
@@ -16,7 +16,8 @@ This file covers how to **develop** the project. For how AI agents **consume** t
 ## Stack
 - Python >=3.10 (developed/verified on 3.12). Fully type-annotated, `mypy --strict`.
 - pydantic v2 (models), typer + rich (CLI), requests/urllib3 (HTTP), beautifulsoup4, markdown, python-dotenv.
-- `mcp` (FastMCP) SDK for the MCP server — declared as the `[server]` extra (`pip install "pocmap[server]"`).
+- `mcp` SDK 2.x (`mcp.server.mcpserver.MCPServer`) for the MCP server — declared as the
+  `[server]` extra (`pip install "pocmap[server]"`). Serves protocol `2026-07-28`.
 - Layered: CLI/MCP (presentation) → `services/` → `clients/` → `models` (pydantic). See README "Architecture".
 
 ## Project Structure — IMPORTANT
@@ -24,7 +25,7 @@ This file covers how to **develop** the project. For how AI agents **consume** t
   `models.py`, `services/`, `clients/`, `bugbounty/`, `utils/`, `data/`, `templates/`, `mcp_server.py`.
   Installed as editable `pocmap`. (The old repo-root shadow `models.py`/`services.py`/`__init__.py` mock
   modules were **removed**; there is no silent mock fallback.)
-- **MCP server implementation** is `src/pocmap/mcp_server.py` (19 tools, 3 resources, 3 prompts), exposed as
+- **MCP server implementation** is `src/pocmap/mcp_server.py` (20 tools, 3 resources, 3 prompts), exposed as
   the `pocmap-mcp` console script. Repo-root `mcp_server.py` is a thin launcher shim; `mcp_transport_stdio.py`
   / `mcp_transport_sse.py` remain at the repo root for alternate transports.
 - Playbook JSON is loaded from `src/pocmap/bugbounty/playbooks/`.

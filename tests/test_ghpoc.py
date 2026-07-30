@@ -14,6 +14,7 @@ These tests are fully offline: the underlying GitHub search
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 
 import pytest
 
@@ -39,11 +40,26 @@ def _fake_pocs(n: int) -> list[Exploit]:
     ]
 
 
+def _fake_search(n: int) -> Callable[..., list[Exploit]]:
+    """Stand-in for ``GitHubClient.search_pocs``.
+
+    Honours ``limit`` the way the real client does — it slices *before* spending
+    a GitHub API call per repo on language enrichment, so the cap has to be
+    applied down here rather than by the service above.
+    """
+
+    def _search(cve_id: str, limit: int | None = None) -> list[Exploit]:
+        pocs = _fake_pocs(n)
+        return pocs[:limit] if limit else pocs
+
+    return _search
+
+
 def test_adapter_find_github_pocs_returns_normalized_dicts(monkeypatch):
     """ServiceAdapter.find_github_pocs(cve, limit=3) returns 3 dicts, not []."""
     adapter = mcp_server.ServiceAdapter()
     monkeypatch.setattr(
-        adapter._exploit._github, "search_pocs", lambda cve_id: _fake_pocs(5)
+        adapter._exploit._github, "search_pocs", _fake_search(5)
     )
 
     result = adapter.find_github_pocs(CVE, limit=3)
@@ -64,7 +80,7 @@ def test_adapter_find_github_pocs_default_limit(monkeypatch):
     """The adapter's default limit (10) caps results and never errors."""
     adapter = mcp_server.ServiceAdapter()
     monkeypatch.setattr(
-        adapter._exploit._github, "search_pocs", lambda cve_id: _fake_pocs(25)
+        adapter._exploit._github, "search_pocs", _fake_search(25)
     )
 
     result = adapter.find_github_pocs(CVE)
@@ -76,7 +92,7 @@ def test_adapter_find_github_pocs_default_limit(monkeypatch):
 def test_service_find_github_pocs_no_limit_returns_all(monkeypatch):
     """CLI path: ExploitService.find_github_pocs(cve) with no limit returns all."""
     svc = ExploitService()
-    monkeypatch.setattr(svc._github, "search_pocs", lambda cve_id: _fake_pocs(7))
+    monkeypatch.setattr(svc._github, "search_pocs", _fake_search(7))
 
     result = svc.find_github_pocs(CVE)
 
@@ -86,7 +102,7 @@ def test_service_find_github_pocs_no_limit_returns_all(monkeypatch):
 def test_service_find_github_pocs_with_limit_slices(monkeypatch):
     """ExploitService.find_github_pocs(cve, limit=N) slices to N."""
     svc = ExploitService()
-    monkeypatch.setattr(svc._github, "search_pocs", lambda cve_id: _fake_pocs(9))
+    monkeypatch.setattr(svc._github, "search_pocs", _fake_search(9))
 
     assert len(svc.find_github_pocs(CVE, limit=4)) == 4
     # limit larger than available returns everything
@@ -101,7 +117,7 @@ def test_service_find_github_pocs_accepts_limit_kwarg_no_typeerror(monkeypatch):
     assert "limit" in sig.parameters
 
     svc = ExploitService()
-    monkeypatch.setattr(svc._github, "search_pocs", lambda cve_id: _fake_pocs(2))
+    monkeypatch.setattr(svc._github, "search_pocs", _fake_search(2))
 
     # 2. Calling with limit= must NOT raise TypeError (it did before the fix).
     try:
@@ -120,7 +136,7 @@ def test_adapter_does_not_mask_populated_results(monkeypatch):
     """
     adapter = mcp_server.ServiceAdapter()
     monkeypatch.setattr(
-        adapter._exploit._github, "search_pocs", lambda cve_id: _fake_pocs(4)
+        adapter._exploit._github, "search_pocs", _fake_search(4)
     )
 
     result = adapter.find_github_pocs(CVE, limit=10)

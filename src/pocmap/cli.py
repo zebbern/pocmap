@@ -91,10 +91,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-console = Console()
+# ``emoji=False`` on both consoles: Rich substitutes ``:shortcode:`` sequences for
+# emoji, and CVE data is full of colon-delimited text that collides with real
+# shortcodes — ``cpe:2.3:a:apple:xcode:*`` would otherwise render (and, under
+# ``--format json``, be *emitted*) as ``cpe:2.3:a<apple emoji>xcode:*``. pocmap never
+# uses Rich emoji shortcodes itself, so disabling the substitution is loss-free.
+console = Console(emoji=False)
 # Separate stderr console for notes that must not pollute a machine-readable
 # stdout stream (e.g. the ``bulk --fail-on`` gate message under ``--format json``).
-err_console = Console(stderr=True)
+err_console = Console(stderr=True, emoji=False)
 app = typer.Typer(
     name="pocmap",
     help="A modern, AI-friendly tool to find PoCs related to CVE IDs",
@@ -1622,6 +1627,11 @@ def discover(
         "normalized_vendor": result.normalized_vendor,
         "normalized_product": result.normalized_product,
         "version_constraint": result.version_constraint.model_dump(mode="json") if result.version_constraint else None,
+        # How the CVEs were found. ``nvd_cpe_match`` means the product resolved to
+        # canonical CPEs; ``nvd_keyword_search`` means it did not and the noisier
+        # full-text fallback ran — a materially weaker result worth surfacing.
+        "search_sources": result.search_sources,
+        "matched_cpes": result.matched_cpes,
         "total_found": result.total_found,
         "confirmed_affected": [cve.model_dump(mode="json") for cve in result.confirmed_affected],
         "possibly_affected": [cve.model_dump(mode="json") for cve in result.possibly_affected],
@@ -1901,6 +1911,49 @@ def _check_cache() -> CheckResult:
     )
 
 
+# Folder names that indicate a cloud-synced directory. Exploit source landing in
+# one gets uploaded to the provider, where their scanner may flag the account and
+# the content can be shared further than intended.
+_SYNCED_DIR_MARKERS = (
+    "onedrive", "dropbox", "google drive", "googledrive",
+    "icloud", "com~apple~clouddocs", "nextcloud", "sync.com", "pcloud", "box sync",
+)
+
+
+def _check_poc_source_dir() -> CheckResult:
+    """Check where fetched PoC *source* would land, when fetching is enabled.
+
+    Only meaningful once the operator opted in — until then nothing is written,
+    so a misconfigured path is not yet a problem worth reporting.
+    """
+    name = "PoC source directory"
+    if not settings.allow_fetch_poc_source:
+        return CheckResult(
+            name,
+            "SKIPPED",
+            "fetching disabled (set POCMAP_ALLOW_FETCH_POC_SOURCE=1 to enable)",
+            "poc_source",
+        )
+
+    target = Path(settings.poc_source_dir)
+    lowered = str(target).lower()
+    synced = next((m for m in _SYNCED_DIR_MARKERS if m in lowered), None)
+    if synced:
+        return CheckResult(
+            name,
+            "WARN",
+            f"{target} looks cloud-synced ({synced}) — exploit source would be "
+            "uploaded; point POCMAP_POC_SOURCE_DIR at a local, unsynced path",
+            "poc_source",
+        )
+    return CheckResult(
+        name,
+        "PASS",
+        f"{target} (fetching enabled; ensure your AV excludes this path)",
+        "poc_source",
+    )
+
+
 def _check_connectivity(offline: bool, prober: UpstreamProber) -> list[CheckResult]:
     """Run (or skip) the injected upstream connectivity probe."""
     if offline:
@@ -1935,6 +1988,7 @@ def _gather_doctor_checks(*, offline: bool, prober: UpstreamProber) -> list[Chec
         _check_github_token(),
         _check_nvd_key(),
         _check_cache(),
+        _check_poc_source_dir(),
     ]
     checks.extend(_check_connectivity(offline, prober))
     return checks

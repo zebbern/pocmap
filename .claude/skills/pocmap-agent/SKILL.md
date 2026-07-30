@@ -2,7 +2,7 @@
 name: pocmap-agent
 description: >
   Use the PocMap Python package for CVE exploit discovery, vulnerability research,
-  and bug bounty hunting. Provides 19 MCP tools and 12 CLI commands for looking up
+  and bug bounty hunting. Provides 20 MCP tools and 12 CLI commands for looking up
   CVEs, finding exploits/PoCs, discovering recent vulnerabilities, product-based
   CVE discovery, CPE/CVSS analysis, bug bounty report lookup, and practice lab
   environments. Trigger when the user mentions CVE lookup, exploit discovery,
@@ -71,7 +71,8 @@ All are synchronous; all support `with ... as svc:` and a `close()` method.
 | `ReportService` | `generate_report(cve_id)`, `generate_bulk_report(cve_ids)`, `generate_bulk_report_from_file(path)`, `save_json_report(...)`, `save_html_report(...)` |
 | `BugBountyService` | `find_reports(cve_id)`, `search_hackerone(cve_id)`, `search_pentesterland(cve_id)`, `search_bugbounty_hunting(cve_id)` |
 | `RecentService` | `find_recent_cves(...)` |
-| `ProductDiscoveryService` | `discover_by_product(product, version=, vendor=, limit=)`, `normalize_product(product)`, `parse_version(version)`, `search_nvd_by_keyword(...)`, `match_cves_to_product(...)` |
+| `ProductDiscoveryService` | `discover_by_product(product, version=, vendor=, limit=)`, `normalize_product(product)`, `parse_version(version)`, `search_nvd_by_cpe(pairs, version_constraint=, limit=)` (primary search path), `search_nvd_by_keyword(...)` (fallback only), `match_cves_to_product(...)` |
+| `CPEDictionaryClient` | `resolve(product, vendor_hint=, max_pairs=)` -> `list[(vendor, product)]` (NVD CPE dictionary) |
 
 ### Toolkit Layer (`pocmap.bugbounty`)
 
@@ -97,8 +98,10 @@ Pick the right MCP tool or CLI command. **All MCP tool names below are exact.**
 | Bug bounty reports | `find_bug_bounty_reports` | `pocmap bugbounty CVE-…` |
 | Practice labs | `find_practice_labs` | `pocmap labs CVE-…` |
 | Vulhub Docker lab | `find_vulhub_docker` | `pocmap labs CVE-…` |
+| **Verify a PoC is real** | **`verify_github_pocs`** (needs `POCMAP_ALLOW_FETCH_POC_SOURCE=1`) | — |
 | CVE → CPE | `cve_to_cpe` | `pocmap cpes CVE-…` |
 | CPE → CVEs | `cpe_to_cve` | `pocmap cpe2cve "cpe:2.3:…"` |
+| **Everything about a CVE (start here)** | **`generate_json_report`** | `pocmap lookup CVE-…` |
 | JSON report (multi-CVE) | `generate_json_report` | `pocmap bulk cves.txt` |
 | HTML report (multi-CVE) | `generate_html_report` | `pocmap bulk cves.txt` |
 | Assessment playbook | `get_cve_assessment_playbook` | — |
@@ -130,7 +133,7 @@ and a `category`. Always check it:
 ```python
 data = json.loads(result)
 if "error" in data:
-    category = data.get("category", "unknown")   # not_found | rate_limited | offline | network_error | invalid_input | permission_error | unknown
+    category = data.get("category", "unknown")   # not_found | rate_limited | offline | network_error | invalid_input | permission_error | not_enabled | unknown
     retryable = data.get("retryable", False)
 ```
 
@@ -188,7 +191,7 @@ loaded from env + optional repo-root `.env`. Verified variables:
 
 ## References
 
-- `references/mcp_tools.md` — all 19 MCP tools with parameters and return shapes.
+- `references/mcp_tools.md` — all 20 MCP tools with parameters and return shapes.
 - `references/cli_commands.md` — all 12 CLI commands with real flags.
 
 ## External Links

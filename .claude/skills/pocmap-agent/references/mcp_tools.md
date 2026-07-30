@@ -1,11 +1,23 @@
 # PocMap MCP Tools Reference
 
-All 19 MCP tools for vulnerability research, exploit discovery, and report generation.
+All 20 MCP tools for vulnerability research, exploit discovery, and report generation.
 
 **Start the server:** `uvx --from pocmap[server] pocmap-mcp` (or installed `pocmap-mcp` /
 `python -m pocmap.mcp_server`). Implementation: `src/pocmap/mcp_server.py`.
 
-Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBountyReport**=`{source,url,has_poc,title}`; **LabEnvironment**=`{platform,name,url}`; **ReportEntry**=`{cve_id,description,cvss_score,severity,epss,kev,exploits,references}`; **RecentExploitResult**=`{cve_id,description,severity,epss,has_poc,in_kev,published_date}`.
+Common types: **Exploit**=`{source,url,title,language,stars,forks,rank,command}`
+(`language`/`stars`/`forks` are `null` for every non-GitHub source; `rank` is set only
+for Metasploit; `command` is set only for the Metasploit/ExploitDB/Nuclei sources);
+**BugBountyReport**=`{source,url,has_poc,title}`; **LabEnvironment**=`{platform,name,url}`;
+**ReportEntry**=`{cve_info,exploits,labs,bb_reports}`;
+**RecentExploitResult**=`{cve_info,has_poc,poc_sources,discovered_at}`.
+
+> **Two different CVE shapes.** Most tools (`lookup_cve`, `discover_product_cves`, and
+> the `cve_info` inside `generate_json_report` entries) go through the MCP normalizer:
+> `cvss.score`, `epss_score` on a **0.0-1.0** scale, `references` as a **list**.
+> `find_recent_exploits` is the exception — its `cve_info` is the raw model dump, using
+> `cvss.base_score`, `epss` on a **0-100** scale, `references` as a **name->URL object**,
+> plus `affected_cpes`/`cpe_matches`. Check which one you are holding before reading a score.
 
 ---
 ## Core CVE Tools
@@ -15,40 +27,55 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 **When to use**: First step for any CVE investigation. Provides description, CVSS, EPSS, KEV, CWEs, references, vendor/product.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier, e.g. `"CVE-2021-44228"`
-**Returns**: JSON with `id`, `description`, `cvss` (`version`, `base_score`, `severity`, `vector_string`), `epss`, `kev_status`, `cwes` (list), `references` (list), `vendor`, `product`, `publication_date`, `state`.
+**Returns**: JSON with `id`, `description`, `cvss` (`version`, **`score`**, `severity`, `vector_string`), **`epss_score`** (0.0-1.0), `kev_status`, `cwes` (list), `references` (list), `vendor`, `product`, `affected_products` (list of `{vendor,product}`), `publication_date`, `state`.
 **Example**:
 ```json
 {"id": "CVE-2021-44228", "description": "Apache Log4j2 JNDI...",
- "cvss": {"version": "3.1", "base_score": 10.0, "severity": "CRITICAL",
+ "cvss": {"version": "3.1", "score": 10.0, "severity": "CRITICAL",
   "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"},
- "epss": 0.975, "kev_status": true, "cwes": ["CWE-20", "CWE-400"],
+ "epss_score": 0.975, "kev_status": true, "cwes": ["CWE-20", "CWE-400"],
  "references": ["https://logging.apache.org/log4j/2.x/security.html"],
- "vendor": "Apache", "product": "Log4j2", "publication_date": "2021-12-10",
- "state": "PUBLISHED"}
+ "vendor": "Apache", "product": "Log4j2",
+ "affected_products": [{"vendor": "apache", "product": "log4j"},
+  {"vendor": "fedoraproject", "product": "fedora"}],
+ "publication_date": "2021-12-10", "state": "PUBLISHED"}
 ```
+> **Note**: the score key is `cvss.score`, not `cvss.base_score`, and the EPSS key is
+> `epss_score` on a 0.0-1.0 scale. `vendor`/`product` are only the *first* of
+> `affected_products` — check the full list to answer "does this affect X?".
+> On failure the tool returns the error envelope instead (`error`, `error_type`,
+> `category`, `retryable`, `context`, `cve_id`).
 ### check_kev_status
 **Purpose**: Check if a CVE is in the CISA KEV catalog.
 **When to use**: To determine exploitation risk. KEV means actively exploited in the wild.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
-**Returns**: JSON with `cve_id`, `in_kev` (bool), `date_added`, `due_date`, `vendor`, `product` (nullable).
+**Returns**: JSON with `cve_id`, `kev_status` (bool), `in_kev_catalog` (bool, same value), `description` (what the KEV catalog is), `recommendation` (actionable text).
 **Example**:
 ```json
-{"cve_id": "CVE-2021-44228", "in_kev": true, "date_added": "2021-12-10",
- "due_date": "2021-12-24", "vendor": "Apache", "product": "Log4j"}
+{"cve_id": "CVE-2021-44228", "kev_status": true, "in_kev_catalog": true,
+ "description": "CISA Known Exploited Vulnerabilities (KEV) catalog lists vulnerabilities that have been actively exploited in the wild.",
+ "recommendation": "PRIORITIZE FOR IMMEDIATE PATCHING - this CVE is actively exploited."}
 ```
+> **Note**: there is no `date_added`, `due_date`, `vendor` or `product` here — the tool
+> reports membership only. On an upstream failure it returns the error envelope rather
+> than `kev_status: false`, so a `false` is a real "not in KEV".
 ### get_epss_score
 **Purpose**: Get the EPSS score for a CVE.
 **When to use**: To assess probability of exploitation in the next 30 days. Use alongside CVSS for risk prioritization.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
-**Returns**: JSON with `cve_id`, `epss_score` (float, **0.0-1.0**), `percentile` (float), `date`.
+**Returns**: JSON with `cve_id`, `epss_score` (float, **0.0-1.0**, or `null`), `risk_level` (`LOW`/`MEDIUM`/`HIGH`/`CRITICAL`, or `UNKNOWN`), `available` (bool), `interpretation` (guidance text).
 **Example**:
 ```json
-{"cve_id": "CVE-2021-44228", "epss_score": 0.97543,
- "percentile": 0.999, "date": "2024-01-15"}
+{"cve_id": "CVE-2021-44228", "epss_score": 0.97543, "risk_level": "CRITICAL",
+ "available": true,
+ "interpretation": "EPSS > 0.9: patch immediately. EPSS > 0.5: high priority. EPSS > 0.2: medium priority. EPSS <= 0.2: lower priority."}
 ```
-> **Note**: EPSS is 0.0-1.0 scale. Multiply by 100 for percentage.
+> **Note**: EPSS is 0.0-1.0 scale here. Multiply by 100 for percentage. There is no
+> `percentile` or `date` field. `risk_level` thresholds: `>0.9` CRITICAL, `>0.5` HIGH,
+> `>0.2` MEDIUM, else LOW. `available: false` (with `epss_score: null`) means the lookup
+> succeeded but the CVE has no EPSS data; an upstream failure returns the error envelope instead.
 ### cve_to_cpe
 **Purpose**: Convert a CVE to CPE identifiers.
 **When to use**: To identify affected product configurations or for CPE-based asset correlation.
@@ -81,28 +108,48 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
 - `limit` (int, default `10`): Maximum results
-**Returns**: JSON with `cve_id`, `exploits` (list of **Exploit**).
+**Returns**: JSON with `cve_id`, `total_count`, `pocs` (list of **Exploit** — the key is
+`pocs`, not `exploits`), and `sources` (per-source health).
 **Example**:
 ```json
-{"cve_id": "CVE-2021-44228",
- "exploits": [{"source": "github",
+{"cve_id": "CVE-2021-44228", "total_count": 1,
+ "pocs": [{"source": "github",
   "url": "https://github.com/user/CVE-2021-44228-PoC",
-  "title": "Log4j RCE PoC", "language": "Java", "stars": 1200, "forks": 300}]}
+  "title": "Log4j RCE PoC", "language": "Java", "stars": 1200, "forks": 300,
+  "rank": null, "command": null}],
+ "sources": [{"source": "github", "status": "ok", "count": 1, "retryable": false}]}
 ```
+> **Always read `sources` before concluding "no PoCs exist."** Each entry is
+> `{source, status, count, retryable}` plus `category` and `detail` when something went
+> wrong. `status` is one of `ok` (responded, >=1 result), `empty` (responded, 0 results),
+> `rate_limited` (throttled — retry, or set `GITHUB_API_TOKEN`), or `error` (network/HTTP
+> failure). An empty `pocs` with `status: "rate_limited"` means *unknown*, not *none*.
+>
+> Results union the Nomi-sec and TrickestCVE indexes, deduped, aggregator repos filtered.
+> **Trust the order**: sorting happens *before* metadata enrichment, so Trickest-only
+> entries (which arrive with no star/language data) always sort last regardless of their
+> true popularity — treat a trailing entry with `stars: null`/`language: null` as an
+> unverified lead, not a known PoC. `limit` is also applied before enrichment, which costs
+> one GitHub API call per repo against an unauthenticated budget of 60/hour; request only
+> what you will use.
 ### find_metasploit_module
 **Purpose**: Find a Metasploit module for a CVE.
 **When to use**: When you need a tested exploit framework module with payloads and auxiliary capabilities.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
 - `limit` (int, default `1`): Maximum results to scan (1-10)
-**Returns**: JSON with `cve_id`, `found` (bool), `module` (**Exploit** or `null`).
+**Returns**: JSON with `cve_id`, `found` (bool), `module` (**Exploit** or `null`), `note`.
+The `url` is the Rapid7 module page; `title` is the module fullname; `command` is the
+ready-to-run msfconsole invocation; `rank` is the reliability rating.
 **Example**:
 ```json
 {"cve_id": "CVE-2021-44228", "found": true,
  "module": {"source": "metasploit",
-  "url": "exploit/multi/http/log4shell_header_injection",
-  "title": "Log4Shell HTTP Header Injection", "language": "Ruby",
-  "stars": 0, "forks": 0}}
+  "url": "https://www.rapid7.com/db/modules/exploit/multi/http/log4shell_header_injection",
+  "title": "exploit/multi/http/log4shell_header_injection",
+  "language": null, "stars": null, "forks": null, "rank": "excellent",
+  "command": "msfconsole -q -x 'use exploit/multi/http/log4shell_header_injection'"},
+ "note": "Metasploit module available - indicates mature, reliable exploit code."}
 ```
 ### find_exploitdb_entry
 **Purpose**: Find an ExploitDB entry for a CVE.
@@ -110,13 +157,18 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
 - `limit` (int, default `1`): Maximum results to scan (1-10)
-**Returns**: JSON with `cve_id`, `found` (bool), `entry` (**Exploit** or `null`).
+**Returns**: JSON with `cve_id`, `found` (bool), `entry` (**Exploit** or `null`), `note`.
+`title` is the exploit's path within the ExploitDB repo (not a prose title); `command` is
+the searchsploit invocation that mirrors the exploit locally.
 **Example**:
 ```json
 {"cve_id": "CVE-2021-44228", "found": true,
  "entry": {"source": "exploitdb",
   "url": "https://www.exploit-db.com/exploits/50592",
-  "title": "Apache Log4j2 RCE", "language": "Python", "stars": 0, "forks": 0}}
+  "title": "exploits/java/remote/50592.py",
+  "language": null, "stars": null, "forks": null, "rank": null,
+  "command": "searchsploit -m 50592"},
+ "note": "ExploitDB entry available - often the first standalone exploit published."}
 ```
 ### find_nuclei_template
 **Purpose**: Find a Nuclei template for a CVE.
@@ -124,13 +176,23 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
 - `limit` (int, default `1`): Maximum results to scan (1-10)
-**Returns**: JSON with `cve_id`, `found` (bool), `template` (**Exploit** or `null`).
+**Returns**: JSON with `cve_id`, `found` (bool), `template` (**Exploit** or `null`), `note`.
+`url` is the ProjectDiscovery cloud library page; `title` is the template path; `command`
+is the nuclei invocation (`null` when the template path is unknown).
 **Example**:
 ```json
 {"cve_id": "CVE-2021-44228", "found": true,
- "template": {"source": "nuclei", "url": "cves/2021/CVE-2021-44228.yaml",
-  "title": "Apache Log4j2 RCE", "language": "YAML", "stars": 0, "forks": 0}}
+ "template": {"source": "nuclei",
+  "url": "https://cloud.projectdiscovery.io/library/CVE-2021-44228",
+  "title": "http/cves/2021/CVE-2021-44228.yaml",
+  "language": null, "stars": null, "forks": null, "rank": null,
+  "command": "nuclei -t http/cves/2021/CVE-2021-44228.yaml [-u <target>]"},
+ "note": "Nuclei template available - can be used for rapid detection/verification."}
 ```
+> **Note on all three DB tools**: `language`, `stars` and `forks` are always `null` — those
+> are GitHub-repo metadata and these sources are not GitHub repos. `limit` bounds how many
+> entries *of that source* are considered; the three tools are independent, so a Metasploit
+> hit never suppresses the ExploitDB entry or Nuclei template.
 ---
 ## Bug Bounty & Lab Tools
 
@@ -139,28 +201,33 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 **When to use**: When researching real-world exploitation or preparing bug bounty submissions.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
-**Returns**: JSON with `cve_id`, `reports` (list of **BugBountyReport**).
+**Returns**: JSON with `cve_id`, `total_count`, `reports` (list of **BugBountyReport**).
 **Example**:
 ```json
-{"cve_id": "CVE-2021-44228",
+{"cve_id": "CVE-2021-44228", "total_count": 1,
  "reports": [{"source": "hackerone",
   "url": "https://hackerone.com/reports/1425474",
   "has_poc": true, "title": "Log4Shell RCE in Production"}]}
 ```
+> **Note**: `source` is a lowercase enum value — `hackerone`, `pentesterland`,
+> `bugbounty_hunting`, or `other`.
 ### find_practice_labs
 **Purpose**: Find practice lab environments for a CVE.
 **When to use**: For hands-on practice in a safe, controlled environment.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
-**Returns**: JSON with `cve_id`, `labs` (list of **LabEnvironment**).
+**Returns**: JSON with `cve_id`, `total_count`, `labs` (list of **LabEnvironment**).
 **Example**:
 ```json
-{"cve_id": "CVE-2021-44228",
- "labs": [{"platform": "HackTheBox", "name": "LogForge",
+{"cve_id": "CVE-2021-44228", "total_count": 2,
+ "labs": [{"platform": "hackthebox", "name": "LogForge",
   "url": "https://app.hackthebox.com/machines/LogForge"},
-  {"platform": "TryHackMe", "name": "Log4j2 RCE",
+  {"platform": "tryhackme", "name": "Log4j2 RCE",
   "url": "https://tryhackme.com/room/log4j2rce"}]}
 ```
+> **Note**: `platform` is a lowercase enum value — `hackthebox`, `tryhackme`, `vulhub`, or
+> `other` (not `HackTheBox`/`TryHackMe`). Match on the lowercase form. `setup_instructions`
+> is *not* included here; use `find_vulhub_docker` for Docker setup steps.
 ### find_vulhub_docker
 **Purpose**: Find a Vulhub Docker environment for a CVE.
 **When to use**: When you need a reproducible Docker-based lab for local testing.
@@ -180,28 +247,51 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 ## Report Generation Tools
 
 ### generate_json_report
-**Purpose**: Generate a structured JSON report for multiple CVEs.
-**When to use**: When you need structured data for dashboards or programmatic processing.
+**Purpose**: Everything known about one or more CVEs, in a single call.
+**When to use**: **Default entry point for any question about known CVE IDs.** Returns what
+`lookup_cve` + `find_github_pocs` + `find_metasploit_module` + `find_nuclei_template` +
+`check_kev_status` + `find_bug_bounty_reports` + `find_practice_labs` return — one round
+trip instead of seven, with the sources fetched concurrently server-side. Takes
+comma-separated IDs, so "prioritize these N CVEs" is also one call. Reach for the
+single-purpose tools only to drill into one source afterwards. Also suitable for
+dashboards and programmatic processing.
 **Parameters**:
 - `cve_ids` (str, required): Comma-separated CVE IDs, e.g. `"CVE-2021-44228,CVE-2021-45046"`
-**Returns**: JSON with `entries` (list of **ReportEntry**) and `errors` (list of failed lookups).
+**Returns**: JSON with `generated_at`, `total_requested`, `total_entries`, `total_errors`,
+`entries` (list of **ReportEntry**), and `errors` (list of `{cve_id, error}` for CVEs whose
+lookup failed). Each entry is `{cve_info, exploits, labs, bb_reports}` — the CVE fields are
+nested under `cve_info` (normalizer shape: `cvss.score`, `epss_score` 0.0-1.0), not flattened.
+`exploits` merges the GitHub PoCs with the Metasploit/ExploitDB/Nuclei entries.
 **Example**:
 ```json
-{"entries": [{"cve_id": "CVE-2021-44228", "description": "Apache Log4j2 JNDI...",
-  "cvss_score": 10.0, "severity": "CRITICAL", "epss": 0.975, "kev": true,
-  "exploits": [], "references": []}], "errors": []}
+{"generated_at": "2024-01-15T09:30:00Z", "total_requested": 1,
+ "total_entries": 1, "total_errors": 0,
+ "entries": [{
+   "cve_info": {"id": "CVE-2021-44228", "description": "Apache Log4j2 JNDI...",
+     "cvss": {"version": "3.1", "score": 10.0, "severity": "CRITICAL",
+      "vector_string": "CVSS:3.1/AV:N/..."},
+     "epss_score": 0.975, "kev_status": true, "cwes": ["CWE-20"],
+     "references": [], "vendor": "Apache", "product": "Log4j2",
+     "affected_products": [], "publication_date": "2021-12-10", "state": "PUBLISHED"},
+   "exploits": [], "labs": [], "bb_reports": []}],
+ "errors": []}
 ```
+> **Note**: more than 100 CVEs returns `{"error": ..., "category": "invalid_input"}`.
 ### generate_html_report
 **Purpose**: Generate a styled HTML report for multiple CVEs.
 **When to use**: When you need a human-readable, shareable report for stakeholders.
 **Parameters**:
 - `cve_ids` (str, required): Comma-separated CVE IDs
-**Returns**: JSON with `format`="html", `content` (HTML string), `cve_count` (int), `status`.
+**Returns**: JSON with `format`="html", `content` (HTML string), `cve_count` (int), and
+`status` — which is the literal string **`"ok"`**, not `"success"`.
 **Example**:
 ```json
 {"format": "html", "content": "<!DOCTYPE html>...",
- "cve_count": 2, "status": "success"}
+ "cve_count": 2, "status": "ok"}
 ```
+> **Note**: `cve_count` counts the CVEs *requested*, not the ones that resolved — a failed
+> lookup is rendered as an error row in the HTML but still counted. More than 100 CVEs
+> returns `{"error": ..., "category": "invalid_input"}`.
 ---
 ## Discovery Tools
 
@@ -218,15 +308,33 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 - `severity` (str, default `""`): `"LOW"`, `"MEDIUM"`, `"HIGH"`, `"CRITICAL"`
 - `sort` (str, default `"cve_date"`): Sort field
 - `limit` (int, default `50`): Maximum results
-**Returns**: JSON with `results` (list of **RecentExploitResult**) and `metadata` (`total`, `time_range`).
+**Returns**: JSON with `success` (bool), `total` (int), `query` (the echoed filter
+parameters), and `cves` (list of **RecentExploitResult**). There is no `results` key and no
+`metadata` block.
 **Example**:
 ```json
-{"results": [{"cve_id": "CVE-2024-1234", "description": "RCE in...",
-  "severity": "HIGH", "epss": 0.45, "has_poc": true, "in_kev": false,
-  "published_date": "2024-01-15"}],
- "metadata": {"total": 1, "time_range": "2024-01-15 to 2024-01-16"}}
+{"success": true, "total": 1,
+ "query": {"since": "24h", "from_date": null, "to_date": null,
+  "only_with_poc": false, "kev_only": false, "min_epss": null,
+  "severity": ["CRITICAL"], "sort": "cve_date", "limit": 50},
+ "cves": [{
+   "cve_info": {"id": "CVE-2024-1234", "description": "RCE in...",
+     "cvss": {"version": "3.1", "base_score": 8.8, "severity": "HIGH",
+      "vector_string": "CVSS:3.1/AV:N/..."},
+     "epss": 45.0, "kev_status": false, "cwes": [],
+     "references": {"NVD": "https://nvd.nist.gov/..."},
+     "vendor": "Acme", "product": "Widget", "publication_date": "2024-01-15",
+     "state": "PUBLISHED", "affected_products": [], "affected_cpes": [],
+     "cpe_matches": []},
+   "has_poc": true, "poc_sources": ["github"],
+   "discovered_at": "2024-01-16T09:30:00"}]}
 ```
-> **Note**: `min_epss` uses 0-100 scale (e.g., `50` = EPSS >= 50%). `get_epss_score` returns 0.0-1.0.
+> **Note**: each item nests the CVE under `cve_info` — nothing is hoisted to the item's top
+> level. This `cve_info` is the **raw model dump**, so unlike `lookup_cve` it uses
+> `cvss.base_score`, `epss` on the **0-100** scale, and `references` as a name->URL object.
+> `min_epss` likewise uses the 0-100 scale (e.g. `50` = EPSS >= 50%), while
+> `get_epss_score` returns 0.0-1.0. On failure the tool returns
+> `{"success": false, "error": ...}`.
 ### discover_product_cves
 **Purpose**: Discover CVEs affecting a specific product and version.
 **When to use**: When assessing a product's vulnerability landscape. Supports aliases (e.g., `"struts"` -> `"Apache Struts"`).
@@ -235,7 +343,13 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
 - `version` (str, default `""`): `"2.x"`, `"2.14.1"`, `"v2.14.1"`
 - `vendor` (str, default `""`): Vendor name for disambiguation
 - `limit` (int, default `50`): Maximum results
-**Returns**: JSON with `query`, `normalized_vendor`, `normalized_product`, `version_constraint` (object or `null`), `total_found`, `confirmed_affected`, `possibly_affected`, `not_enough_data` (each a list of full normalized CVE dicts, same shape as `lookup_cve`), and `summary` (`confirmed_count`, `possibly_count`, `unknown_count`).
+**Returns**: JSON with `query`, `normalized_vendor`, `normalized_product`, `version_constraint` (object or `null`), `total_found`, `search_sources`, `matched_cpes`, `confirmed_affected`, `possibly_affected`, `not_enough_data` (each a list of full normalized CVE dicts, same shape as `lookup_cve`), and `summary` (`confirmed_count`, `possibly_count`, `unknown_count`).
+
+`search_sources` says how the CVEs were found, and gates how much to trust the tiers:
+`["nvd_cpe_match"]` = the product resolved to canonical CPEs (authoritative, and
+`matched_cpes` lists them); `["nvd_keyword_search"]` = it did not, so this is a
+full-text search over CVE descriptions — noisy and incomplete, and `matched_cpes` is empty.
+
 **Example**:
 ```json
 {"query": "struts", "normalized_vendor": "apache",
@@ -243,62 +357,69 @@ Common types: **Exploit**=`{source,url,title,language,stars,forks}`; **BugBounty
  "version_constraint": {"major": 2, "minor": "x", "patch": null,
   "range_op": null, "raw": "2.x", "is_wildcard": true},
  "total_found": 3,
+ "search_sources": ["nvd_cpe_match"],
+ "matched_cpes": ["cpe:2.3:*:apache:struts"],
  "confirmed_affected": [{"id": "CVE-2023-50164", "description": "...",
-  "cvss": {"base_score": 9.8, "severity": "CRITICAL"}, "epss": 0.94,
-  "kev_status": true, "vendor": "Apache", "product": "Struts"}],
+  "cvss": {"version": "3.1", "score": 9.8, "severity": "CRITICAL",
+   "vector_string": "CVSS:3.1/AV:N/..."}, "epss_score": 0.94,
+  "kev_status": true, "vendor": "Apache", "product": "Struts",
+  "affected_products": [{"vendor": "apache", "product": "struts"}]}],
  "possibly_affected": [], "not_enough_data": [],
  "summary": {"confirmed_count": 1, "possibly_count": 0, "unknown_count": 0}}
 ```
 ---
 ## Playbook Tools
 
+All three take **no parameters** and return the playbook JSON file verbatim. They share one
+shape: playbook metadata at the top level plus `phases`, where every phase is
+`{phase_id, name, description, estimated_time_minutes, steps}` and every **step is an
+object**, not a string:
+
+```json
+{"step_id": "1.1",
+ "description": "Review bug bounty program rules and scope",
+ "action": "Read program policy page. Document in-scope domains, IPs, and wildcard patterns...",
+ "tools": ["browser"], "output": "scope_notes.md", "priority": "P0",
+ "tips": "Screenshot the scope page - it may change."}
+```
+
+`step_id`, `description`, `action`, `tools` and `priority` (`P0`-`P4`) are present on every
+step; the remaining keys vary by playbook (see each entry below). Common top-level metadata:
+`$schema`, `name`, `description`, `version`, `author`, `created`, `difficulty`,
+`estimated_time_hours`, `prerequisites`, `phases`.
+
 ### get_cve_assessment_playbook
-**Purpose**: Retrieve the structured CVE assessment playbook.
+**Purpose**: Retrieve the structured CVE assessment playbook (6 phases).
 **When to use**: When you need a methodical approach to evaluating a CVE.
 **Parameters**: None
-**Returns**: JSON with `phases` (list of `{name, steps[]}`).
-**Example**:
+**Returns**: The playbook JSON. Steps additionally carry `output` and `tips`. Extra top-level
+keys: `checklist_references`, `templates`, `Escalation_rules`.
+**Example** (abridged):
 ```json
-{"phases": [
-  {"name": "Initial Assessment",
-   "steps": ["Identify CVE and affected versions",
-    "Determine if in your environment", "Assess CVSS and EPSS"]},
-  {"name": "Impact Analysis",
-   "steps": ["Evaluate business impact",
-    "Check CISA KEV status", "Review available exploits"]}
-]}
+{"name": "CVE Assessment Playbook", "difficulty": "intermediate",
+ "estimated_time_hours": 4, "prerequisites": ["..."],
+ "phases": [{"phase_id": "1", "name": "Scope Preparation",
+   "description": "Prepare and validate bug bounty scope",
+   "estimated_time_minutes": 30,
+   "steps": [{"step_id": "1.1", "description": "Review bug bounty program rules and scope",
+     "action": "Read program policy page...", "tools": ["browser"],
+     "output": "scope_notes.md", "priority": "P0", "tips": "..."}]}]}
 ```
 ### get_rapid_response_playbook
 **Purpose**: Retrieve the rapid response playbook for critical CVEs.
 **When to use**: For zero-day or critical CVE situations requiring accelerated response.
 **Parameters**: None
-**Returns**: JSON playbook with `phases` and `steps` for rapid response.
-**Example**:
-```json
-{"phases": [
-  {"name": "Immediate Triage (< 1h)",
-   "steps": ["Confirm CVE and affected assets",
-    "Check KEV and EPSS", "Activate IR if EPSS > 0.5 or in KEV"]},
-  {"name": "Containment (< 4h)",
-   "steps": ["Deploy interim mitigations", "Identify and patch systems"]}
-]}
-```
+**Returns**: The playbook JSON. Steps additionally carry `command`, `output`,
+`time_limit_minutes`, `tips` and `go_no_go_criteria` — this is the time-boxed playbook, so
+honour `time_limit_minutes`. Extra top-level keys: `trigger_conditions`, `goal`,
+`time_budget`, `speed_optimization`, `risk_mitigation`.
 ### get_bug_bounty_playbook
 **Purpose**: Retrieve the bug bounty submission playbook.
 **When to use**: When preparing bug bounty reports -- guides disclosure, PoC creation, and report writing.
 **Parameters**: None
-**Returns**: JSON playbook with `phases` and `steps` for bug bounty workflows.
-**Example**:
-```json
-{"phases": [
-  {"name": "Reconnaissance",
-   "steps": ["Identify target scope and rules",
-    "Map attack surface", "Research known CVEs for target"]},
-  {"name": "Exploitation & PoC",
-   "steps": ["Develop minimal reproducible PoC",
-    "Document exploit chain", "Assess impact"]}
-]}
-```
+**Returns**: The playbook JSON. Steps additionally carry `checklist` and `failure_action`.
+Extra top-level keys: `trigger_conditions`, `supported_platforms`,
+`report_quality_checklist`, `common_pitfalls`, `Escalation_contacts`.
 ---
 ## Quick Lookup Table
 

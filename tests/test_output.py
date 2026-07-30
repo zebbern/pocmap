@@ -115,6 +115,38 @@ def test_render_table_none_prints_nothing() -> None:
 
 
 # ---------------------------------------------------------------------------
+# render() must not let Rich rewrite the payload
+# ---------------------------------------------------------------------------
+
+def test_render_json_does_not_substitute_emoji_shortcodes() -> None:
+    """CPE strings survive verbatim (regression: ``:apple:`` -> apple emoji).
+
+    Rich replaces ``:shortcode:`` sequences with emoji by default. CVE data is
+    full of colon-delimited text that collides with real shortcodes, and the
+    corrupted output is still *valid JSON* — so this asserts on the exact byte
+    sequence rather than merely round-tripping through ``json.loads``.
+    """
+    cpe = "cpe:2.3:a:apple:xcode:*:*:*:*:*:*:*:*"
+    # A default Console (emoji enabled) — render() itself must suppress it.
+    console = Console(file=io.StringIO(), width=200)
+    render({"cpes": [cpe], "note": "flagged :warning: and :x:"}, OutputFormat.JSON, console=console)
+
+    raw = console.file.getvalue()
+    assert cpe in raw
+    assert ":warning:" in raw and ":x:" in raw
+    assert json.loads(raw)["cpes"] == [cpe]
+
+
+def test_cli_consoles_have_emoji_substitution_disabled() -> None:
+    """The table path shares the same hazard as ``--format json``."""
+    from pocmap.cli import console as cli_console
+    from pocmap.cli import err_console
+
+    for con in (cli_console, err_console):
+        assert con.render_str("cpe:2.3:a:apple:xcode").plain == "cpe:2.3:a:apple:xcode"
+
+
+# ---------------------------------------------------------------------------
 # lookup --format json
 # ---------------------------------------------------------------------------
 

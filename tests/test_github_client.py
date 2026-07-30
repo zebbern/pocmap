@@ -23,7 +23,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pocmap.clients.github_client import GitHubClient
+from pocmap.clients.github_client import DEFAULT_ENRICH_LIMIT, GitHubClient
 from pocmap.models import ExploitSource
 from pocmap.utils.http import HTTPError, OfflineError, RateLimitError
 
@@ -99,8 +99,177 @@ def test_http_error_falls_back_to_trickest_and_returns_empty() -> None:
     http.get_text.assert_called_once()
 
 
-def test_exploit_from_nomi_missing_full_name_returns_none() -> None:
-    client = GitHubClient(http_client=MagicMock())
+def test_nomi_entry_without_a_url_is_skipped() -> None:
+    client = _client_returning([{"description": "no url"}, *_nomi_repos(7)])
+    assert [ex.stars for ex in client.search_pocs("CVE-2021-44228")] == [7]
 
-    assert client._exploit_from_nomi({}) is None
-    assert client._exploit_from_nomi({"html_url": "https://github.com/x/y"}) is None
+
+# ---------------------------------------------------------------------------
+# TrickestCVE: bare-URL parsing, and union rather than dead fallback
+# ---------------------------------------------------------------------------
+
+# Trickest emits bare URLs under an h4. python-markdown does not autolink them,
+# so requiring an <a> tag yielded zero results for every CVE.
+_TRICKEST_MD = """
+### CVE-2021-44228
+
+#### Reference
+- https://nvd.nist.gov/vuln/detail/CVE-2021-44228
+
+#### Github
+- https://github.com/hunter/real-poc
+- https://github.com/0xor0ne/awesome-list
+- https://github.com/0xfke/500-free-TryHackMe-rooms
+- https://github.com/other/second-poc
+"""
+
+
+def _union_client(nomi: list[dict[str, Any]], markdown: str) -> GitHubClient:
+    http = MagicMock()
+
+    def fake_get_json(url: str, **_: Any) -> Any:
+        return nomi if url.endswith(".json") else {}
+
+    http.get_json.side_effect = fake_get_json
+    http.get_text.return_value = markdown
+    return GitHubClient(http_client=http)
+
+
+def test_parse_trickest_md_reads_bare_urls() -> None:
+    client = GitHubClient(http_client=MagicMock())
+    assert client._parse_trickest_md(_TRICKEST_MD) == [
+        "https://github.com/hunter/real-poc",
+        "https://github.com/0xor0ne/awesome-list",
+        "https://github.com/0xfke/500-free-TryHackMe-rooms",
+        "https://github.com/other/second-poc",
+    ]
+
+
+def test_trickest_is_unioned_with_nomi_not_used_only_as_a_fallback() -> None:
+    """A populated Nomi-sec response used to short-circuit Trickest entirely."""
+    client = _union_client(_nomi_repos(100), _TRICKEST_MD)
+    urls = {ex.url for ex in client.search_pocs("CVE-2021-44228")}
+
+    assert "https://github.com/user/repo0" in urls  # from Nomi-sec
+    assert "https://github.com/hunter/real-poc" in urls  # from Trickest
+
+
+def test_empty_nomi_list_still_consults_trickest() -> None:
+    """An empty (but successful) Nomi-sec response returned early before."""
+    client = _union_client([], _TRICKEST_MD)
+    urls = {ex.url for ex in client.search_pocs("CVE-2021-44228")}
+    assert "https://github.com/hunter/real-poc" in urls
+
+
+def test_aggregator_repos_are_filtered_out() -> None:
+    client = _union_client([], _TRICKEST_MD)
+    urls = {ex.url for ex in client.search_pocs("CVE-2021-44228")}
+
+    assert "https://github.com/0xor0ne/awesome-list" not in urls
+    assert "https://github.com/0xfke/500-free-TryHackMe-rooms" not in urls
+    assert len(urls) == 2
+
+
+def test_duplicate_repo_across_sources_is_deduped() -> None:
+    nomi = [
+        {
+            "full_name": "hunter/real-poc",
+            "html_url": "https://github.com/hunter/real-poc",
+            "description": "PoC",
+            "stargazers_count": 42,
+            "forks_count": 3,
+        }
+    ]
+    client = _union_client(nomi, _TRICKEST_MD)
+    result = client.search_pocs("CVE-2021-44228")
+
+    matching = [ex for ex in result if ex.url == "https://github.com/hunter/real-poc"]
+    assert len(matching) == 1
+    # The Nomi-sec entry wins, so its star count is preserved.
+    assert matching[0].stars == 42
+
+
+# ---------------------------------------------------------------------------
+# The limit must be applied BEFORE per-repo enrichment
+# ---------------------------------------------------------------------------
+
+def test_limit_is_applied_before_enrichment_api_calls() -> None:
+    """Enrichment costs one GitHub API call per repo against a 60/hour budget."""
+    http = MagicMock()
+    repo_calls: list[str] = []
+
+    def fake_get_json(url: str, **_: Any) -> Any:
+        if url.endswith(".json"):
+            return _nomi_repos(*range(40))
+        repo_calls.append(url)
+        return {}
+
+    http.get_json.side_effect = fake_get_json
+    http.get_text.return_value = ""
+    client = GitHubClient(http_client=http)
+
+    result = client.search_pocs("CVE-2021-44228", limit=3)
+
+    assert len(result) == 3
+    assert len(repo_calls) == 3  # not 40
+
+
+def test_unlimited_search_bounds_enrichment_but_returns_everything() -> None:
+    """``pocmap lookup`` passes no limit; the union can be 70+ repos.
+
+    Enriching all of them would blow the 60/hour unauthenticated budget, so the
+    call is bounded — without dropping results.
+    """
+    http = MagicMock()
+    repo_calls: list[str] = []
+    markdown = "#### Github\n" + "\n".join(
+        f"- https://github.com/t/poc{i}" for i in range(60)
+    )
+
+    def fake_get_json(url: str, **_: Any) -> Any:
+        if url.endswith(".json"):
+            return _nomi_repos(*range(9))
+        repo_calls.append(url)
+        return {}
+
+    http.get_json.side_effect = fake_get_json
+    http.get_text.return_value = markdown
+    client = GitHubClient(http_client=http)
+
+    result = client.search_pocs("CVE-2023-38408")
+
+    assert len(result) == 69  # nothing dropped
+    assert len(repo_calls) == DEFAULT_ENRICH_LIMIT  # not 69
+    # Un-enriched entries are "unknown" (None), not the "N/A" of a real lookup.
+    assert all(ex.language is not None for ex in result[:DEFAULT_ENRICH_LIMIT])
+    assert all(ex.language is None for ex in result[DEFAULT_ENRICH_LIMIT:])
+
+
+def test_trickest_only_entries_rank_below_nomi_sec_entries() -> None:
+    """Trickest lists include repos that merely mention the CVE."""
+    http = MagicMock()
+    http.get_json.side_effect = lambda url, **_: (
+        _nomi_repos(3, 1) if url.endswith(".json") else {}
+    )
+    http.get_text.return_value = "#### Github\n- https://github.com/t/mentions-it\n"
+    client = GitHubClient(http_client=http)
+
+    urls = [ex.url for ex in client.search_pocs("CVE-2021-44228")]
+    assert urls[-1] == "https://github.com/t/mentions-it"
+
+
+def test_rate_limit_during_enrichment_propagates() -> None:
+    """A 429 mid-enrichment must not degrade to language="N/A" under an ok status."""
+    http = MagicMock()
+
+    def fake_get_json(url: str, **_: Any) -> Any:
+        if url.endswith(".json"):
+            return _nomi_repos(5)
+        raise RateLimitError("throttled", status_code=403)
+
+    http.get_json.side_effect = fake_get_json
+    http.get_text.return_value = ""
+    client = GitHubClient(http_client=http)
+
+    with pytest.raises(RateLimitError):
+        client.search_pocs("CVE-2021-44228")

@@ -281,3 +281,53 @@ def test_nvd_key_valid_and_invalid() -> None:
     assert nvd_api_key_looks_valid("12345678-1234-1234-1234-123456789abc") is True
     assert nvd_api_key_looks_valid("not-a-uuid") is False
     assert nvd_api_key_looks_valid("") is False
+
+
+# ---------------------------------------------------------------------------
+# PoC source directory check
+# ---------------------------------------------------------------------------
+
+def test_poc_source_check_is_skipped_while_fetching_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing is written until the operator opts in, so nothing to warn about."""
+    monkeypatch.setattr(cli, "settings", Settings(allow_fetch_poc_source=False))
+    result = cli._check_poc_source_dir()
+    assert result.status == "SKIPPED"
+    assert "POCMAP_ALLOW_FETCH_POC_SOURCE" in result.detail
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"C:\Users\me\OneDrive\pocsrc",
+        r"C:\Users\me\Dropbox\poc",
+        "/Users/me/Library/Mobile Documents/com~apple~CloudDocs/poc",
+        "/home/me/Google Drive/poc",
+        "/home/me/Nextcloud/poc",
+    ],
+)
+def test_poc_source_check_warns_on_a_cloud_synced_path(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """Syncing exploit source uploads it to a provider that will flag it."""
+    monkeypatch.setattr(
+        cli,
+        "settings",
+        Settings(allow_fetch_poc_source=True, poc_source_dir=Path(path)),
+    )
+    result = cli._check_poc_source_dir()
+    assert result.status == "WARN"
+    assert "POCMAP_POC_SOURCE_DIR" in result.detail
+
+
+def test_poc_source_check_passes_on_a_local_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "settings",
+        Settings(allow_fetch_poc_source=True, poc_source_dir=tmp_path / "poc-source"),
+    )
+    result = cli._check_poc_source_dir()
+    assert result.status == "PASS"

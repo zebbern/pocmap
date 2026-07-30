@@ -34,9 +34,17 @@ DEFAULT_THREAD_POOL_SIZE: Final[int] = 10
 # Persistent HTTP response cache (see utils/cache.py).
 DEFAULT_CACHE_TTL: Final[int] = 3600  # seconds an entry stays fresh
 DEFAULT_CACHE_MAX_MB: Final[int] = 200  # total on-disk cap before LRU eviction
+# Per-repo cap for fetched PoC source. Applied to the download *and* the
+# extracted bytes: a small tar.gz can expand to gigabytes, so the extraction
+# side is the one that actually stops a decompression bomb.
+DEFAULT_POC_SOURCE_MAX_MB: Final[int] = 20
+DEFAULT_POC_SOURCE_TOTAL_MAX_MB: Final[int] = 500
 
 # API endpoint URLs
 NVD_API_BASE: Final[str] = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+# The CPE *dictionary* — maps a product name to the canonical vendor:product
+# pairs NVD files CVEs under. Distinct from NVD_API_BASE, which serves CVEs.
+NVD_CPE_API_BASE: Final[str] = "https://services.nvd.nist.gov/rest/json/cpes/2.0"
 CVE_ORG_GIT_RAW: Final[str] = (
     "https://raw.githubusercontent.com/CVEProject/cvelistV5/refs/heads/main"
 )
@@ -120,6 +128,19 @@ class Settings:
         offline: When ``True``, HTTP GETs are served only from the cache; a
             cache miss raises a clear offline error instead of hitting the
             network (``POCMAP_OFFLINE``).
+        allow_fetch_poc_source: Opt-in switch for downloading PoC *source code*
+            to disk (``POCMAP_ALLOW_FETCH_POC_SOURCE``). **Off by default and
+            deliberately not inferable**: fetching writes third-party exploit
+            code into ``poc_source_dir``, which endpoint protection will often
+            quarantine and which the operator must consciously accept. Intended
+            for an isolated VM / research host.
+        poc_source_dir: Where fetched PoC source is extracted
+            (``POCMAP_POC_SOURCE_DIR``); defaults to ``<cache_dir>/poc-source``.
+        poc_source_max_mb: Per-repository cap in MB, applied to both the
+            download and the *extracted* size, so a decompression bomb cannot
+            fill the disk (``POCMAP_POC_SOURCE_MAX_MB``).
+        poc_source_total_max_mb: Total on-disk cap in MB for all fetched
+            sources (``POCMAP_POC_SOURCE_TOTAL_MAX_MB``).
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR).
     """
 
@@ -135,6 +156,12 @@ class Settings:
     cache_ttl: int = DEFAULT_CACHE_TTL
     cache_max_mb: int = DEFAULT_CACHE_MAX_MB
     offline: bool = False
+    allow_fetch_poc_source: bool = False
+    poc_source_dir: Path = field(
+        default_factory=lambda: PROJECT_ROOT / ".cache" / "poc-source"
+    )
+    poc_source_max_mb: int = DEFAULT_POC_SOURCE_MAX_MB
+    poc_source_total_max_mb: int = DEFAULT_POC_SOURCE_TOTAL_MAX_MB
     log_level: str = "INFO"
 
     @property
@@ -217,6 +244,19 @@ def _build_settings() -> Settings:
             return default
         return raw.strip().lower() in {"1", "true", "yes", "on"}
 
+    def _safe_dir(env_var: str, default: Path) -> Path:
+        """Parse an environment variable as a directory path with fallback.
+
+        An empty or whitespace-only value is treated as *unset*. ``Path("")``
+        is the current working directory, which would silently retarget a
+        directory pocmap manages — and the PoC-source directory is one pocmap
+        evicts from.
+        """
+        raw = os.getenv(env_var)
+        if raw is None or not raw.strip():
+            return default
+        return Path(raw.strip())
+
     return Settings(
         github_api_token=os.getenv(f"{prefix}GITHUB_API_TOKEN")
         or os.getenv("GITHUB_API_TOKEN"),
@@ -232,10 +272,24 @@ def _build_settings() -> Settings:
         user_agents_file=Path(
             os.getenv(f"{prefix}USER_AGENTS_FILE", str(USER_AGENTS_FILE))
         ),
-        cache_dir=Path(os.getenv(f"{prefix}CACHE_DIR", str(PROJECT_ROOT / ".cache"))),
+        cache_dir=_safe_dir(f"{prefix}CACHE_DIR", PROJECT_ROOT / ".cache"),
         cache_enabled=_safe_bool(f"{prefix}CACHE_ENABLED", True),
         cache_ttl=_safe_int(f"{prefix}CACHE_TTL", DEFAULT_CACHE_TTL),
         cache_max_mb=_safe_int(f"{prefix}CACHE_MAX_MB", DEFAULT_CACHE_MAX_MB),
+        allow_fetch_poc_source=_safe_bool(f"{prefix}ALLOW_FETCH_POC_SOURCE", False),
+        # ``_safe_dir`` rather than ``Path(os.getenv(...))``: an env var set to
+        # the empty string would otherwise yield ``Path("")``, which is the CWD
+        # — and the fetcher evicts from this directory.
+        poc_source_dir=_safe_dir(
+            f"{prefix}POC_SOURCE_DIR",
+            _safe_dir(f"{prefix}CACHE_DIR", PROJECT_ROOT / ".cache") / "poc-source",
+        ),
+        poc_source_max_mb=_safe_int(
+            f"{prefix}POC_SOURCE_MAX_MB", DEFAULT_POC_SOURCE_MAX_MB
+        ),
+        poc_source_total_max_mb=_safe_int(
+            f"{prefix}POC_SOURCE_TOTAL_MAX_MB", DEFAULT_POC_SOURCE_TOTAL_MAX_MB
+        ),
         offline=_safe_bool(f"{prefix}OFFLINE", False),
         log_level=os.getenv(f"{prefix}LOG_LEVEL", "INFO"),
     )

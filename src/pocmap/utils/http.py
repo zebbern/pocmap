@@ -293,8 +293,15 @@ class OfflineError(HTTPError):
     pass
 
 
-class ValidationError(PocMapError):
-    """Raised when input validation fails."""
+class ValidationError(PocMapError, ValueError):
+    """Raised when input validation fails.
+
+    Also a :class:`ValueError`: bad input *is* a value error, callers reasonably
+    write ``except ValueError``, and :func:`categorize_exception` keys
+    ``invalid_input`` off it. Without that base a malformed CVE ID was reported
+    to agents as ``category: "unknown"`` despite the documented contract
+    promising ``invalid_input``.
+    """
 
     pass
 
@@ -358,9 +365,14 @@ def categorize_exception(exc: BaseException) -> tuple[str, bool]:
         return "offline", False
     if isinstance(exc, PermissionError):
         return "permission_error", False
+    if isinstance(exc, NotFoundError):
+        # Checked before the network bucket: the resource genuinely does not
+        # exist upstream, so retrying will not change the answer.
+        return "not_found", False
     if isinstance(exc, (TimeoutError, ConnectionError, OSError, HTTPError)):
         return "network_error", True
     if isinstance(exc, ValueError):
+        # Includes ValidationError, which subclasses ValueError.
         return "invalid_input", False
     return "unknown", False
 

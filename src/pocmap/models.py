@@ -224,6 +224,14 @@ class ProductDiscoveryResult(BaseModel):
     )
     total_found: int = Field(default=0, description="Total CVEs analyzed")
     search_sources: list[str] = Field(default_factory=list, description="Data sources queried")
+    matched_cpes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Canonical vendor:product CPE prefixes the query resolved to. "
+            "Empty when the product could not be resolved and the noisier "
+            "keyword search was used instead (see ``search_sources``)."
+        ),
+    )
 
 
 class CVSSScore(BaseModel):
@@ -296,6 +304,80 @@ class CPEInfo(BaseModel):
                 version=parts[5] if parts[5] else None,
             )
         return cls(cpe_string=cpe_string)
+
+
+class AffectedProduct(BaseModel):
+    """One ``(vendor, product)`` pair a CVE is recorded against.
+
+    A single CVE routinely names several: the vulnerable component plus every
+    distribution that shipped it (e.g. ``f5:nginx`` alongside
+    ``fedoraproject:fedora``). Matching must consider all of them — collapsing
+    to a single pair silently drops the component the CVE is actually about.
+
+    Attributes:
+        vendor: Vendor name as it appears in the CPE (already lowercased by NVD).
+        product: Product name as it appears in the CPE.
+    """
+
+    vendor: str = Field(..., description="Vendor name from the CPE")
+    product: str = Field(..., description="Product name from the CPE")
+
+
+class CPEMatch(BaseModel):
+    """A CPE applicability statement, including its version bounds.
+
+    Modern NVD entries express affected version *ranges* out-of-band: the CPE
+    ``criteria`` carries ``*`` in the version field and the real range lives in
+    the ``versionStart*`` / ``versionEnd*`` attributes. Reading only the literal
+    version field therefore matches everything.
+
+    Attributes:
+        criteria: The CPE 2.3 string.
+        version_start_including: Inclusive lower bound, if any.
+        version_start_excluding: Exclusive lower bound, if any.
+        version_end_including: Inclusive upper bound, if any.
+        version_end_excluding: Exclusive upper bound, if any.
+        vulnerable: Whether NVD marks this CPE as vulnerable (vs. merely a platform).
+    """
+
+    criteria: str = Field(..., description="CPE 2.3 string")
+    version_start_including: str | None = Field(
+        default=None, description="Inclusive lower version bound"
+    )
+    version_start_excluding: str | None = Field(
+        default=None, description="Exclusive lower version bound"
+    )
+    version_end_including: str | None = Field(
+        default=None, description="Inclusive upper version bound"
+    )
+    version_end_excluding: str | None = Field(
+        default=None, description="Exclusive upper version bound"
+    )
+    vulnerable: bool = Field(default=True, description="Whether NVD marks this CPE vulnerable")
+
+    @classmethod
+    def from_nvd(cls, match: dict[str, Any]) -> Self:
+        """Build from a raw NVD ``cpeMatch`` object."""
+        return cls(
+            criteria=match.get("criteria", ""),
+            version_start_including=match.get("versionStartIncluding"),
+            version_start_excluding=match.get("versionStartExcluding"),
+            version_end_including=match.get("versionEndIncluding"),
+            version_end_excluding=match.get("versionEndExcluding"),
+            vulnerable=bool(match.get("vulnerable", True)),
+        )
+
+    @property
+    def has_range(self) -> bool:
+        """Whether this match carries any out-of-band version bound."""
+        return any(
+            (
+                self.version_start_including,
+                self.version_start_excluding,
+                self.version_end_including,
+                self.version_end_excluding,
+            )
+        )
 
 
 class Exploit(BaseModel):
@@ -444,6 +526,17 @@ class CVEInfo(BaseModel):
     )
     affected_cpes: list[str] = Field(
         default_factory=list, description="Affected CPE 2.3 strings extracted from NVD data"
+    )
+    affected_products: list[AffectedProduct] = Field(
+        default_factory=list,
+        description=(
+            "Every (vendor, product) pair the CVE is recorded against. "
+            "``vendor``/``product`` above are the first of these, kept for compatibility."
+        ),
+    )
+    cpe_matches: list[CPEMatch] = Field(
+        default_factory=list,
+        description="Full CPE applicability statements, including version bounds",
     )
 
     @field_validator("epss", mode="before")
