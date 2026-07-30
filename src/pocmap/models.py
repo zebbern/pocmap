@@ -277,6 +277,63 @@ class CVSSScore(BaseModel):
         )
 
 
+class ATTACKMappingType(str, Enum):
+    """How a CVE relates to an ATT&CK technique.
+
+    The distinction is the point: ``exploitation_technique`` is *how the CVE is
+    exploited*, while the impact types are *what the attacker achieves next*.
+    A detection engineer wants the first; a risk assessment wants the others.
+    """
+
+    EXPLOITATION = "exploitation_technique"
+    PRIMARY_IMPACT = "primary_impact"
+    SECONDARY_IMPACT = "secondary_impact"
+    UNKNOWN = "unknown"
+
+
+class ATTACKTechnique(BaseModel):
+    """A MITRE ATT&CK technique a CVE has been mapped to.
+
+    Attributes:
+        technique_id: ATT&CK technique ID (e.g. ``T1190``, ``T1505.003``).
+        name: Human-readable technique name.
+        mapping_type: Whether this is the exploitation technique or an impact.
+        comment: The curator's explanation of why the CVE maps here.
+        url: Canonical ATT&CK page for the technique.
+        references: Supporting references recorded with the mapping.
+    """
+
+    technique_id: str = Field(..., description="ATT&CK technique ID")
+    name: str = Field(default="", description="Technique name")
+    mapping_type: ATTACKMappingType = Field(
+        default=ATTACKMappingType.UNKNOWN, description="Exploitation vs impact"
+    )
+    comment: str | None = Field(default=None, description="Why this CVE maps here")
+    url: str = Field(default="", description="ATT&CK technique page")
+    references: list[str] = Field(default_factory=list, description="Supporting references")
+
+    @classmethod
+    def from_ctid(cls, obj: dict[str, Any]) -> Self:
+        """Build from a CTID ``mapping_objects`` entry."""
+        tid = str(obj.get("attack_object_id") or "").strip()
+        # Sub-techniques live under their parent: T1505.003 -> /T1505/003
+        path = tid.replace(".", "/")
+        raw_type = str(obj.get("mapping_type") or "").strip()
+        try:
+            mapping_type = ATTACKMappingType(raw_type)
+        except ValueError:
+            mapping_type = ATTACKMappingType.UNKNOWN
+        refs = obj.get("references")
+        return cls(
+            technique_id=tid,
+            name=str(obj.get("attack_object_name") or ""),
+            mapping_type=mapping_type,
+            comment=obj.get("comments") or None,
+            url=f"https://attack.mitre.org/techniques/{path}/" if tid else "",
+            references=[r for r in (refs or []) if isinstance(r, str)],
+        )
+
+
 class CPEInfo(BaseModel):
     """Common Platform Enumeration (CPE) identifier.
 

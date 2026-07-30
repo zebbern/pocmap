@@ -356,6 +356,23 @@ class ServiceAdapter:
         """
         return self._exploit.verify_github_pocs(cve_id, limit=limit)
 
+    def get_attack_techniques(self, cve_id: str) -> dict[str, Any]:
+        """Curated MITRE ATT&CK techniques for a CVE, split by mapping type."""
+        techniques = self._cve.get_attack_techniques(cve_id)
+        return {
+            "techniques": [
+                {
+                    "technique_id": t.technique_id,
+                    "name": t.name,
+                    "mapping_type": self._enum_val(t.mapping_type, "unknown"),
+                    "comment": t.comment,
+                    "url": t.url,
+                    "references": list(t.references),
+                }
+                for t in techniques
+            ],
+        }
+
     def _find_db_exploit(
         self, cve_id: str, source: ExploitSource, limit: int
     ) -> dict[str, Any] | None:
@@ -1157,6 +1174,51 @@ def find_github_pocs(cve_id: str, limit: int = 10) -> str:
         })
     except Exception as e:
         return _tool_error(e, f"find_github_pocs({cve_id})")
+
+
+@mcp.tool(
+    name="get_attack_techniques",
+    description=(
+        "Get the MITRE ATT&CK techniques a CVE maps to — how it is exploited, and what "
+        "the attacker achieves afterwards. Use this when the user asks how a "
+        "vulnerability would actually be used, what to detect or hunt for, or how to "
+        "prioritize defensively; ATT&CK technique IDs are actionable in a way the CWEs "
+        "from lookup_cve are not. Each technique carries a mapping_type: "
+        "'exploitation_technique' is how the CVE itself is exploited (what a detection "
+        "engineer wants), while 'primary_impact'/'secondary_impact' are what follows. "
+        "Each also carries the curator's explanation of why it applies. "
+        "IMPORTANT: these are expert-curated mappings covering the CISA KEV catalogue, "
+        "so an empty result is normal and means NO CURATED MAPPING EXISTS — it does not "
+        "mean the CVE is harmless or unexploitable. Nothing is inferred: pocmap "
+        "deliberately returns nothing rather than guessing from the CVE's CWEs, because "
+        "that inference was measured against this data and produced unrelated results."
+    ),
+)
+def get_attack_techniques(cve_id: str) -> str:
+    """Get curated MITRE ATT&CK techniques for a CVE.
+
+    Args:
+        cve_id: The CVE identifier
+
+    Returns:
+        JSON string with cve_id, total_count, and a ``techniques`` list ordered
+        exploitation-first, each with technique_id, name, mapping_type, comment,
+        url and references.
+    """
+    try:
+        data = _svc.get_attack_techniques(cve_id)
+        techniques = data["techniques"]
+        return _ok({
+            "cve_id": cve_id.upper().strip(),
+            "total_count": len(techniques),
+            "techniques": techniques,
+            "coverage_note": (
+                "Curated mappings cover the CISA KEV catalogue. An empty list means no "
+                "curated mapping exists for this CVE, not that it is unexploitable."
+            ),
+        })
+    except Exception as e:
+        return _tool_error(e, f"get_attack_techniques({cve_id})")
 
 
 @mcp.tool(

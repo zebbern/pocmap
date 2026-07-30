@@ -2,7 +2,7 @@
 name: pocmap-agent
 description: >
   Use the PocMap Python package for CVE exploit discovery, vulnerability research,
-  and bug bounty hunting. Provides 20 MCP tools and 12 CLI commands for looking up
+  and bug bounty hunting. Provides 21 MCP tools and 12 CLI commands for looking up
   CVEs, finding exploits/PoCs, discovering recent vulnerabilities, product-based
   CVE discovery, CPE/CVSS analysis, bug bounty report lookup, and practice lab
   environments. Trigger when the user mentions CVE lookup, exploit discovery,
@@ -94,6 +94,7 @@ Pick the right MCP tool or CLI command. **All MCP tool names below are exact.**
 | ExploitDB entry | `find_exploitdb_entry` | — |
 | Nuclei template | `find_nuclei_template` | — |
 | CISA KEV status | `check_kev_status` | — |
+| **How a CVE is exploited / what to detect** | **`get_attack_techniques`** (MITRE ATT&CK; KEV coverage, empty = unmapped) | — |
 | EPSS score | `get_epss_score` | — |
 | Bug bounty reports | `find_bug_bounty_reports` | `pocmap bugbounty CVE-…` |
 | Practice labs | `find_practice_labs` | `pocmap labs CVE-…` |
@@ -191,7 +192,7 @@ loaded from env + optional repo-root `.env`. Verified variables:
 
 ## References
 
-- `references/mcp_tools.md` — all 20 MCP tools with parameters and return shapes.
+- `references/mcp_tools.md` — all 21 MCP tools with parameters and return shapes.
 - `references/cli_commands.md` — all 12 CLI commands with real flags.
 
 ## External Links

@@ -45,6 +45,28 @@ NVD_API_BASE: Final[str] = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 # The CPE *dictionary* — maps a product name to the canonical vendor:product
 # pairs NVD files CVEs under. Distinct from NVD_API_BASE, which serves CVEs.
 NVD_CPE_API_BASE: Final[str] = "https://services.nvd.nist.gov/rest/json/cpes/2.0"
+
+# CVE -> MITRE ATT&CK technique mappings, curated by the Center for Threat-Informed
+# Defense over the CISA KEV catalogue. Expert-reviewed rather than inferred: the
+# CWE -> CAPEC -> ATT&CK chain that would cover every CVE was measured against this
+# data and produced zero overlap, so only this authoritative set is used.
+#
+# The published path carries both an ATT&CK version and a snapshot date, with no
+# "latest" alias. The pinned URL is tried first (no API budget); if CTID publishes
+# a newer snapshot and the pin 404s, the directory listing below is walked to find
+# it, so the feed self-heals.
+_CTID_RAW: Final[str] = (
+    "https://raw.githubusercontent.com/center-for-threat-informed-defense"
+    "/mappings-explorer/main/mappings/kev"
+)
+ATTACK_KEV_PINNED_URL: Final[str] = (
+    f"{_CTID_RAW}/attack-16.1/kev-07.28.2025/enterprise/"
+    "kev-07.28.2025_attack-16.1-enterprise.json"
+)
+ATTACK_KEV_CONTENTS_API: Final[str] = (
+    "https://api.github.com/repos/center-for-threat-informed-defense"
+    "/mappings-explorer/contents/mappings/kev"
+)
 CVE_ORG_GIT_RAW: Final[str] = (
     "https://raw.githubusercontent.com/CVEProject/cvelistV5/refs/heads/main"
 )

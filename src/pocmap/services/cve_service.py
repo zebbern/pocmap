@@ -16,9 +16,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from pocmap.clients.attack_client import ATTACKClient
 from pocmap.clients.cveorg_client import CVEOrgClient
 from pocmap.clients.nvd_client import NVDClient
-from pocmap.models import CPEInfo, CVEInfo, CVEState, CVSSScore
+from pocmap.models import ATTACKTechnique, CPEInfo, CVEInfo, CVEState, CVSSScore
 from pocmap.utils.http import (
     OfflineError,
     RateLimitError,
@@ -58,9 +59,36 @@ class CVEService:
         self,
         cveorg_client: CVEOrgClient | None = None,
         nvd_client: NVDClient | None = None,
+        attack_client: ATTACKClient | None = None,
     ) -> None:
         self._cveorg = cveorg_client or CVEOrgClient()
         self._nvd = nvd_client or NVDClient()
+        self._attack = attack_client or ATTACKClient()
+
+    def get_attack_techniques(self, cve_id: str) -> list[ATTACKTechnique]:
+        """Return curated MITRE ATT&CK techniques for a CVE.
+
+        Answers "how would this be exploited, and what would the attacker do
+        next" — the operational question a CWE cannot. Techniques come back
+        exploitation-first, then primary and secondary impact.
+
+        Coverage is the CISA KEV catalogue (the actively-exploited CVEs), so an
+        empty list is the common case and means *no curated mapping exists*, not
+        that the CVE is harmless. Nothing is inferred: see
+        :mod:`pocmap.clients.attack_client` for why the CWE-derived alternative
+        was measured and rejected.
+
+        Args:
+            cve_id: The CVE identifier.
+
+        Returns:
+            List of :class:`~pocmap.models.ATTACKTechnique`, possibly empty.
+
+        Raises:
+            ValidationError: If the CVE ID format is invalid.
+        """
+        cve_id = _validate_cve_id(cve_id)
+        return self._attack.get_techniques(cve_id)
 
     @classmethod
     def validate_cve_id(cls, cve_id: str) -> str:
@@ -286,6 +314,7 @@ class CVEService:
         """Release all underlying clients."""
         self._cveorg.close()
         self._nvd.close()
+        self._attack.close()
 
     def __enter__(self) -> CVEService:
         return self

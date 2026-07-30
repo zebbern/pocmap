@@ -11,7 +11,7 @@ AI-agent-optimized CVE exploit discovery toolkit for bug bounty hunters and secu
 
 - **Multi-Source Discovery**: Queries GitHub, Exploit-DB, Metasploit, Nuclei, CTF labs, and bug bounty platforms simultaneously
 - **Structured Pydantic Models**: All data validated and serialized with full type safety and JSON Schema support
-- **MCP Server Integration**: 20 AI-native tools via Model Context Protocol for Claude Desktop, Cursor, and other AI agents
+- **MCP Server Integration**: 21 AI-native tools via Model Context Protocol for Claude Desktop, Cursor, and other AI agents
 - **Bug Bounty Toolkit**: Complete hunter toolkit with checklists, workflows, report templates, prioritization engine, and scope management
 - **Rich CLI**: 12 commands with colorized tables, progress bars, and bulk processing
 - **Composable Output**: `table`, `json`, `csv`, `md`, and `sarif` output on read commands, plus a stable [exit-code contract](#output-formats--exit-codes) for scripting and CI
@@ -763,7 +763,7 @@ GitHub Actions job that runs the gate and uploads the SARIF to code scanning, an
 
 ## AI Agent Integration
 
-PocMap includes a full MCP (Model Context Protocol) server exposing 20 AI-native tools for integration with Claude Desktop, Cursor, and other MCP-compatible clients.
+PocMap includes a full MCP (Model Context Protocol) server exposing 21 AI-native tools for integration with Claude Desktop, Cursor, and other MCP-compatible clients.
 
 ### MCP Server Setup for Claude Desktop
 
@@ -835,13 +835,14 @@ pocmap-mcp --debug
 Repo-root `python mcp_server.py` is a thin launcher shim to the same module (handy in a
 git checkout). See also [`examples/mcp-config.json`](examples/mcp-config.json).
 
-### MCP Tools (20 Total)
+### MCP Tools (21 Total)
 
 | Tool | Category | Description |
 |------|----------|-------------|
 | `lookup_cve` | CVE Intel | Full CVE details from NVD, CVE.org, CISA KEV, EPSS |
 | `get_epss_score` | CVE Intel | EPSS exploitation probability score (0.0-1.0) with risk level |
 | `check_kev_status` | CVE Intel | Check CISA Known Exploited Vulnerabilities catalog status |
+| `get_attack_techniques` | CVE Intel | MITRE ATT&CK techniques a CVE maps to — how it's exploited and what follows |
 | `find_github_pocs` | Exploits | GitHub PoC repos with stars, language, and forks |
 | `verify_github_pocs` | Exploits | **Reads PoC source** to score whether a repo really exploits the CVE (opt-in) |
 | `find_metasploit_module` | Exploits | Metasploit module availability and msfconsole command |
@@ -925,7 +926,7 @@ Use these schemas for:
 ```
 +------------------+     +------------------+     +------------------+
 |     CLI Layer    |     |   MCP Server     |     |   Python API     |
-|   (Typer/Rich)   |     |  (MCP SDK / 20   |     |   (Services)     |
+|   (Typer/Rich)   |     |  (MCP SDK / 21   |     |   (Services)     |
 +------------------+     |     Tools)       |     +------------------+
          |               +------------------+             |
          |                         |                      |

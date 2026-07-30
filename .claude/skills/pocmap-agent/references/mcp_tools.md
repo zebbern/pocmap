@@ -1,6 +1,6 @@
 # PocMap MCP Tools Reference
 
-All 20 MCP tools for vulnerability research, exploit discovery, and report generation.
+All 21 MCP tools for vulnerability research, exploit discovery, and report generation.
 
 **Start the server:** `uvx --from pocmap[server] pocmap-mcp` (or installed `pocmap-mcp` /
 `python -m pocmap.mcp_server`). Implementation: `src/pocmap/mcp_server.py`.
@@ -76,6 +76,30 @@ for Metasploit; `command` is set only for the Metasploit/ExploitDB/Nuclei source
 > `percentile` or `date` field. `risk_level` thresholds: `>0.9` CRITICAL, `>0.5` HIGH,
 > `>0.2` MEDIUM, else LOW. `available: false` (with `epss_score: null`) means the lookup
 > succeeded but the CVE has no EPSS data; an upstream failure returns the error envelope instead.
+### get_attack_techniques
+**Purpose**: MITRE ATT&CK techniques a CVE maps to.
+**When to use**: When the user asks how a vulnerability would actually be exploited, what
+to detect or hunt for, or how to prioritize defensively. ATT&CK technique IDs are
+actionable where `lookup_cve`'s CWEs are not.
+**Parameters**:
+- `cve_id` (str, required): CVE identifier
+**Returns**: JSON with `cve_id`, `total_count`, `coverage_note`, and `techniques` (ordered
+exploitation-first), each `{technique_id, name, mapping_type, comment, url, references}`.
+`mapping_type` is `exploitation_technique` (how the CVE itself is exploited),
+`primary_impact` or `secondary_impact` (what the attacker achieves next).
+**Example**:
+```json
+{"cve_id": "CVE-2021-44228", "total_count": 5,
+ "techniques": [{"technique_id": "T1190", "name": "Exploit Public-Facing Application",
+   "mapping_type": "exploitation_technique",
+   "comment": "This remote code execution vulnerability is exploited through maliciously-crafted requests...",
+   "url": "https://attack.mitre.org/techniques/T1190/", "references": ["..."]}]}
+```
+> **An empty list means UNMAPPED, not harmless.** Mappings are expert-curated over the
+> CISA KEV catalogue, so most CVEs have none. pocmap deliberately does not infer
+> techniques from CWEs — that chain was measured against the curated data and produced
+> unrelated results — so nothing is returned rather than a guess. Sub-technique URLs use
+> the parent path (`T1505.003` -> `/techniques/T1505/003/`).
 ### cve_to_cpe
 **Purpose**: Convert a CVE to CPE identifiers.
 **When to use**: To identify affected product configurations or for CPE-based asset correlation.

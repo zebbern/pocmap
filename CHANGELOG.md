@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`get_attack_techniques` (21st MCP tool) — CVE to MITRE ATT&CK technique mapping.**
+  pocmap already returned CWEs, but a CWE names a weakness *class*, which an agent cannot
+  act on. An ATT&CK technique answers the operational question: how is this exploited, and
+  what does the attacker do next. Each technique carries a `mapping_type`
+  (`exploitation_technique` — what a detection engineer wants — versus
+  `primary_impact` / `secondary_impact`) and the curator's explanation of why it applies.
+  Source is the Center for Threat-Informed Defense's expert-curated KEV mappings (419
+  CVEs, 155 techniques). The published path is version- and date-stamped with no "latest"
+  alias, so a pinned URL is tried first and directory discovery only runs if it 404s —
+  the feed self-heals without spending GitHub API budget on the normal path.
+
+  **Nothing is inferred.** The obvious way to cover every CVE is the published
+  `CWE -> CAPEC -> ATT&CK` chain; it was implemented, measured against the curated data,
+  and rejected. It produces **zero** overlap with the expert mappings, and only yields
+  output at all when the CWE is too generic to be meaningful — precise weaknesses
+  (CWE-502 deserialization, CWE-77/78 command injection, CWE-917 EL injection) reach no
+  technique, while the catch-all CWE-20 fans out to seven unrelated ones, suggesting
+  "Steal Web Session Cookie" for Log4Shell. A CVE with no curated mapping therefore
+  returns an empty list, and the tool description tells agents that empty means
+  *unmapped*, not *unexploitable*.
+- **`reason` on PoC evidence.** `verify_github_pocs` returned a verdict plus the raw
+  signals, leaving every consumer to re-derive why. Each verdict now states the deciding
+  signal in one line (e.g. "cites 118 distinct CVEs with 0 code file(s) — an index, not a
+  PoC for this one").
+
 ## [2.4.0] - 2026-07-30
 
 ### Changed

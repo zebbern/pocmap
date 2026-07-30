@@ -54,7 +54,7 @@ def test_server_speaks_the_2026_07_28_protocol() -> None:
 
 # The advertised tool count, repeated across README, AGENTS.md, mcp_config.json
 # and the pocmap-agent skill. Changing it means updating all of them.
-EXPECTED_TOOL_COUNT = 20
+EXPECTED_TOOL_COUNT = 21
 
 
 def test_advertised_tool_count_is_registered() -> None:
@@ -69,6 +69,7 @@ def test_advertised_tool_count_is_registered() -> None:
         "lookup_cve",
         "find_github_pocs",
         "verify_github_pocs",
+        "get_attack_techniques",
         "find_bug_bounty_reports",
         "find_practice_labs",
         "discover_product_cves",

@@ -25,7 +25,7 @@ This file covers how to **develop** the project. For how AI agents **consume** t
   `models.py`, `services/`, `clients/`, `bugbounty/`, `utils/`, `data/`, `templates/`, `mcp_server.py`.
   Installed as editable `pocmap`. (The old repo-root shadow `models.py`/`services.py`/`__init__.py` mock
   modules were **removed**; there is no silent mock fallback.)
-- **MCP server implementation** is `src/pocmap/mcp_server.py` (20 tools, 3 resources, 3 prompts), exposed as
+- **MCP server implementation** is `src/pocmap/mcp_server.py` (21 tools, 3 resources, 3 prompts), exposed as
   the `pocmap-mcp` console script. Repo-root `mcp_server.py` is a thin launcher shim; `mcp_transport_stdio.py`
   / `mcp_transport_sse.py` remain at the repo root for alternate transports.
 - Playbook JSON is loaded from `src/pocmap/bugbounty/playbooks/`.

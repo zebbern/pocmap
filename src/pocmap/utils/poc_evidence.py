@@ -98,6 +98,8 @@ class PoCEvidence:
         language: Dominant language inferred from extensions, if any.
         total_bytes: Total size of the scanned files.
         verdict: ``confirmed`` / ``likely`` / ``unverified`` / ``unrelated``.
+        reason: One line naming the signal that decided the verdict, so a caller
+            does not have to re-derive it from the raw counts.
         matched_paths: Up to a few paths where the CVE ID was found.
     """
 
@@ -109,6 +111,7 @@ class PoCEvidence:
     language: str | None = None
     total_bytes: int = 0
     verdict: str = "unverified"
+    reason: str = ""
     matched_paths: list[str] = field(default_factory=list)
 
     @property
@@ -139,6 +142,7 @@ class PoCEvidence:
             "language": self.language,
             "total_bytes": self.total_bytes,
             "verdict": self.verdict,
+            "reason": self.reason,
             "matched_paths": self.matched_paths,
         }
 
@@ -248,6 +252,7 @@ def analyze(root: Path, cve_id: str) -> PoCEvidence:
 
     evidence.distinct_cves = len(all_cves)
     evidence.verdict = _verdict(evidence)
+    evidence.reason = _reason(evidence)
     return evidence
 
 
@@ -255,6 +260,34 @@ def _remember(evidence: PoCEvidence, root: Path, path: Path) -> None:
     """Record where the CVE ID was found, capped for payload size."""
     if len(evidence.matched_paths) < 5:
         evidence.matched_paths.append(path.relative_to(root).as_posix())
+
+
+def _reason(evidence: PoCEvidence) -> str:
+    """One line naming the signal that decided the verdict.
+
+    The raw counts are all returned, so a caller *could* work this out — but
+    stating it costs nothing and saves every consumer the same inference.
+    """
+    e = evidence
+    if e.looks_like_an_index:
+        if e.distinct_cves >= _INDEX_CVE_THRESHOLD:
+            return (
+                f"cites {e.distinct_cves} distinct CVEs with {e.code_files} code "
+                f"file(s) — an index, not a PoC for this one"
+            )
+        return f"{e.doc_files} documentation files and {e.code_files} code file(s) — an index"
+    if e.mentions_cve_in_code and e.code_files:
+        return f"names the CVE in code, across {e.code_files} code file(s)"
+    if e.mentions_cve and not e.code_files:
+        return f"names the CVE but ships no code ({e.doc_files} doc file(s)) — a writeup"
+    if e.code_files and e.mentions_cve:
+        return (
+            f"{e.code_files} code file(s), but the CVE appears only in documentation "
+            "— unproven, not disproven"
+        )
+    if e.code_files:
+        return f"{e.code_files} code file(s), but this CVE is never named — unproven"
+    return "no code and no mention of this CVE"
 
 
 def _verdict(evidence: PoCEvidence) -> str:

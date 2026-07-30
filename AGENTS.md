@@ -4,7 +4,7 @@ This document is designed specifically for AI agents (Claude, GPT, Cursor, etc.)
 
 ## Overview
 
-PocMap provides 20 MCP tools, 3 resources, and 3 prompts for comprehensive vulnerability intelligence. All tools return JSON strings for reliable programmatic parsing.
+PocMap provides 21 MCP tools, 3 resources, and 3 prompts for comprehensive vulnerability intelligence. All tools return JSON strings for reliable programmatic parsing.
 
 **When to use this toolkit:**
 - User asks about a specific CVE ID
@@ -62,13 +62,14 @@ or when you have no CVE ID yet (`discover_product_cves`, `find_recent_exploits`)
 
 ## Available Tools and When to Use Each
 
-### CVE Intelligence (3 tools)
+### CVE Intelligence (4 tools)
 
 | Tool | When to Use | Key Output Fields |
 |------|-------------|-------------------|
 | `lookup_cve` | User mentions any CVE ID | `id` (the CVE identifier — `cve_id` appears only in the error envelope), `description`, `cvss` (score, severity, version, vector_string), `epss_score`, `kev_status`, `cwes`, `vendor`, `product`, `affected_products`, `state` |
 | `get_epss_score` | Prioritizing which CVEs to patch first | `epss_score` (0.0-1.0), `risk_level` (LOW/MEDIUM/HIGH/CRITICAL), `interpretation` |
 | `check_kev_status` | Determining if a CVE is actively exploited | `kev_status` (bool), `recommendation` (actionable) |
+| `get_attack_techniques` | User asks how a CVE would be exploited, what to detect, or how to hunt for it | `techniques[]` with `technique_id`, `name`, `mapping_type`, `comment`, `url` |
 
 **Decision rule:** For anything beyond "what is this CVE", start with **`generate_json_report`**
 — it returns CVE details *plus* exploits, labs and bug bounty reports in one round trip
@@ -76,6 +77,19 @@ instead of seven (see [Start here](#start-here-one-call-instead-of-seven)). Use 
 when you only need the CVE metadata itself; it is the cheapest call and provides the
 superset of the other two in this table. Only call `get_epss_score` or `check_kev_status`
 individually if the user asks specifically about EPSS or KEV.
+
+**`get_attack_techniques` — empty is not "harmless".** Mappings are expert-curated over
+the CISA KEV catalogue, so most CVEs have none and `total_count: 0` means *no curated
+mapping exists*. Never report that as "this CVE has no known exploitation technique".
+pocmap deliberately does not infer techniques from the CVE's CWEs: that chain was
+measured against the curated data and produced unrelated results (for Log4Shell it
+suggests "Steal Web Session Cookie"), so nothing is better than a plausible guess.
+
+Read `mapping_type` before using a technique. `exploitation_technique` is how the CVE
+itself is exploited — that is what a detection or hunting question wants.
+`primary_impact` / `secondary_impact` are what the attacker achieves afterwards, which
+suits risk and blast-radius questions. Each carries the curator's `comment` explaining
+why it applies; quote that rather than paraphrasing a bare technique ID.
 
 **Upstream-failure note:** On an upstream failure (throttle/offline/network), `get_epss_score` and `check_kev_status` now return the standard error envelope (`category` `rate_limited`/`offline`/`network_error` with a `retryable` flag), **not** `available: false` / `kev_status: false`. A genuine "no EPSS data" / "not in KEV" from a *successful* lookup still returns `available: false` / `kev_status: false`.
 
