@@ -57,7 +57,11 @@ CODELOAD_BASE = "https://codeload.github.com"
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 
 # Default branch varies by repo and codeload has no "default branch" alias.
-_BRANCHES = ("main", "master")
+# Refs to try, in order. ``HEAD`` resolves whatever the repository's default
+# branch actually is, so it covers the ones that use neither convention —
+# Karmakstylez/CVE-2024-6387 defaults to "production" and was unreachable
+# without it. It is last so the common cases still take one request.
+_REFS = ("refs/heads/main", "refs/heads/master", "HEAD")
 
 # Guards a tarball with a huge number of tiny entries, which exhausts inodes
 # and wall-clock rather than bytes.
@@ -208,13 +212,14 @@ class CodeloadClient:
 
         max_bytes = settings.poc_source_max_mb * _BYTES_PER_MB
         last_error: Exception | None = None
-        for branch in _BRANCHES:
-            url = f"{CODELOAD_BASE}/{owner}/{repo}/tar.gz/refs/heads/{branch}"
+        for ref in _REFS:
+            url = f"{CODELOAD_BASE}/{owner}/{repo}/tar.gz/{ref}"
             try:
                 blob = self._download(url, max_bytes)
             except HTTPError as exc:
                 last_error = exc
                 continue
+            branch = ref.rsplit("/", 1)[-1] if ref.startswith("refs/") else ref
             written = self._extract(blob, dest, max_bytes)
             logger.info(
                 "Fetched PoC source %s/%s@%s -> %s (%d bytes)",
@@ -230,7 +235,7 @@ class CodeloadClient:
             )
 
         raise HTTPError(
-            f"Could not fetch {owner}/{repo} from any of {_BRANCHES}: {last_error}"
+            f"Could not fetch {owner}/{repo} from any of {_REFS}: {last_error}"
         )
 
     def fetch_url(self, repo_url: str, *, force: bool = False) -> FetchedSource:

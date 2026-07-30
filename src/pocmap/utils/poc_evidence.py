@@ -155,16 +155,20 @@ def _is_doc(path: Path) -> bool:
     return path.stem.lower() in _DOC_FILENAMES or path.name.lower() in _DOC_FILENAMES
 
 
-def _iter_files(root: Path) -> list[Path]:
-    """Every scannable file under *root*, skipping VCS and vendored trees.
+def _iter_files(root: Path) -> list[tuple[Path, Path]]:
+    """Every scannable file under *root*, as ``(absolute, relative)`` pairs.
 
     Skip names are matched against the path *relative to root*. Matching the
     absolute path instead meant any ancestor directory named ``build``,
     ``dist``, ``vendor`` or ``.venv`` — all ordinary, and ``.venv`` is what this
     project's own README recommends — silently excluded every file, so each
     repository scored ``unrelated`` with no error.
+
+    The relative path is returned rather than recomputed because it is itself
+    evidence: a repository named for a CVE extracts to a directory of that name,
+    so every file beneath it carries the CVE in its path.
     """
-    out: list[Path] = []
+    out: list[tuple[Path, Path]] = []
     for path in root.rglob("*"):
         if not path.is_file():
             continue
@@ -176,7 +180,7 @@ def _iter_files(root: Path) -> list[Path]:
             continue
         if path.name in _SKIP_FILES:
             continue
-        out.append(path)
+        out.append((path, relative))
     return out
 
 
@@ -208,7 +212,7 @@ def analyze(root: Path, cve_id: str) -> PoCEvidence:
     language_bytes: dict[str, int] = {}
     all_cves: set[tuple[str, str]] = set()
 
-    for path in _iter_files(root):
+    for path, relative in _iter_files(root):
         try:
             size = path.stat().st_size
         except OSError:  # pragma: no cover - race with eviction
@@ -231,10 +235,13 @@ def analyze(root: Path, cve_id: str) -> PoCEvidence:
                 blob = fh.read(_SCAN_BYTES)
         except OSError:  # pragma: no cover - unreadable file
             blob = b""
+        # The whole relative path, not just the basename: a repository named
+        # for the CVE extracts to a directory of that name, so every file under
+        # it is path-evidence. Matching only basenames missed a 950-star PoC
+        # whose code lived in CVE-2021-44228-PoC-.../src/main/java/log4j.java.
         # Decode leniently: exploit payloads are frequently not valid UTF-8.
-        text = f"{path.name}\n{blob.decode('utf-8', errors='ignore')}"
+        text = f"{relative.as_posix()}\n{blob.decode('utf-8', errors='ignore')}"
 
-        # Filenames are evidence too: "CVE-2023-38408.sh" says a lot.
         found = bool(pattern.search(text))
 
         if len(all_cves) < _MAX_DISTINCT_CVES:
@@ -306,12 +313,18 @@ def _verdict(evidence: PoCEvidence) -> str:
     index cites hundreds of CVEs in its README while shipping no exploit for any
     of them.
     """
+    if evidence.mentions_cve_in_code and evidence.code_files:
+        # Checked before the index test, and deliberately so: an index does not
+        # ship a code file named for one specific CVE. Without this, a genuine
+        # exploit whose writeup cites related historical CVEs trips the
+        # distinct-CVE threshold — regreSSHion PoCs reference four older
+        # OpenSSH issues, so two real exploits (494 and 380 stars) were being
+        # labelled `unrelated`, which asserts the opposite of the truth.
+        return "confirmed"
     if evidence.looks_like_an_index:
         # An index cites this CVE the same way it cites hundreds of others;
         # that is not a writeup about it.
         return "unrelated"
-    if evidence.mentions_cve_in_code and evidence.code_files:
-        return "confirmed"
     if evidence.mentions_cve and not evidence.code_files:
         return "likely"
     if evidence.code_files:

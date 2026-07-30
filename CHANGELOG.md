@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-07-30
+
+Found by using 2.4.1 as a user would, then measuring rather than generalising. The
+theme is a corrected bias: in a security tool an extra CVE is *visible and dismissible*,
+a missing one is neither, so resolution now errs toward inclusion where the evidence
+supports it.
+
+### Fixed
+- **Edition matching no longer depends on an enumerated list.** 2.4.1 recognised editions
+  via fixed suffixes (`_server`, `_data_center`, ...), which can only ever contain the
+  cases someone thought of — it missed `atlassian:jira_service_desk`,
+  `jira_software_data_center` and `jira_service_management` entirely, the same class of
+  false negative it was written to fix. A product is now admitted when its vendor already
+  publishes an exact-name match *and* its name extends the target, so a vendor's own
+  product family is covered structurally. Third-party lookalikes are still excluded:
+  `redhat:kubernetes-client` is not Kubernetes, `perforce:gliffy` is not Confluence, and
+  `atlassian:questions_for_confluence` shares the namespace but is an add-on.
+- **A repository named for a CVE now counts as evidence.** `verify_github_pocs` matched
+  only file *basenames*, so a 950-star PoC whose code sat in
+  `CVE-2021-44228-PoC-.../src/main/java/log4j.java` — with the CVE named nowhere else but
+  the README — scored `unverified`. The whole relative path is searched.
+- **Real exploits are no longer labelled `unrelated`.** Security PoCs routinely cite the
+  historical CVEs they build on; regreSSHion PoCs reference four older OpenSSH issues,
+  which tripped the distinct-CVE index threshold. Two genuine exploits (494 and 380
+  stars) were told they were unrelated to the CVE they exploit. Naming the CVE *in code*
+  now settles the verdict before the index test, since an index never ships a code file
+  for one specific CVE. The index rule is otherwise unchanged, so link lists are still
+  caught. Measured over 29 fetched repos: `confirmed` rises from 48% to 72% with no new
+  false positives.
+- **Repositories whose default branch is neither `main` nor `master` are reachable.**
+  The codeload fetcher tried those two refs only, so e.g. a repo defaulting to
+  `production` failed and its PoC was silently dropped as a fetch error. `HEAD` is now
+  tried last, resolving whatever the default actually is, and costs nothing for the
+  common cases.
+
 ## [2.4.1] - 2026-07-30
 
 Both fixes came out of using 2.4.0 as a user would, from PyPI, against products and CVEs

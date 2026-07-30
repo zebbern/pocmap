@@ -193,6 +193,52 @@ def test_vcs_and_vendored_trees_are_skipped(tmp_path: Path) -> None:
     assert ev.code_files == 0
 
 
+def test_cve_in_the_directory_path_counts_as_code_evidence(tmp_path: Path) -> None:
+    """A repo named for the CVE extracts to a directory of that name.
+
+    Regression: matching only file *basenames* missed a 950-star PoC whose code
+    lived at CVE-2021-44228-PoC-.../src/main/java/log4j.java with the CVE named
+    nowhere else but the README — it scored `unverified`.
+    """
+    root = tmp_path / "owner__repo"
+    _tree(root / f"{CVE}-PoC-main" / "src", {"exploit.java": "class X {}"})
+    (root / f"{CVE}-PoC-main" / "README.md").write_text("see the writeup")
+
+    ev = analyze(root, CVE)
+    assert ev.mentions_cve_in_code is True
+    assert ev.verdict == "confirmed"
+
+
+def test_path_evidence_does_not_fire_for_a_different_cve(tmp_path: Path) -> None:
+    root = tmp_path / "owner__repo"
+    _tree(root / "CVE-2021-44228-PoC-main" / "src", {"exploit.java": "class X {}"})
+    assert analyze(root, "CVE-2024-3400").mentions_cve is False
+
+
+def test_in_code_evidence_overrides_the_index_verdict(tmp_path: Path) -> None:
+    """Real exploits cite related historical CVEs and were scored `unrelated`.
+
+    regreSSHion PoCs reference four older OpenSSH issues, tripping the
+    distinct-CVE threshold. Two genuine exploits (494 and 380 stars) were being
+    told they were unrelated to the CVE they exploit.
+    """
+    history = " ".join(f"CVE-200{i}-100{i}" for i in range(5))
+    _tree(tmp_path, {
+        f"{CVE}-exploit.c": "int main(void){return 0;}",
+        "README.md": f"builds on prior work: {history}",
+    })
+    ev = analyze(tmp_path, CVE)
+    assert ev.distinct_cves >= 5          # would otherwise look like an index
+    assert ev.verdict == "confirmed"
+
+
+def test_index_without_in_code_evidence_is_still_unrelated(tmp_path: Path) -> None:
+    """The override is narrow: it needs the CVE named in code, not just cited."""
+    cited = " ".join(f"CVE-2021-{40000 + i}" for i in range(30))
+    _tree(tmp_path, {"README.md": f"link list: {CVE}, {cited}"})
+    assert analyze(tmp_path, CVE).verdict == "unrelated"
+
+
 def test_skip_dirs_are_matched_relative_to_root_not_absolute(tmp_path: Path) -> None:
     """Regression: an ancestor named build/.venv voided the entire scan.
 

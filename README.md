@@ -1,6 +1,6 @@
 # PocMap
 
-[![Version](https://img.shields.io/badge/version-2.4.1-blue.svg)](https://github.com/zebbern/pocmap)
+[![Version](https://img.shields.io/badge/version-2.4.2-blue.svg)](https://github.com/zebbern/pocmap)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2-purple.svg)](https://docs.pydantic.dev/)
@@ -472,8 +472,18 @@ pocmap discover "Apache Struts" --version 2.x --output ./struts-cves.json
    NVD files CVEs under, ranked by how many CPE entries back each pair. **All** pairs are
    searched and the results unioned, because products change hands: `nginx` resolves to
    `igor_sysoev:nginx` (0 CVEs), `nginx:nginx` (2) and `f5:nginx` (41), so taking only the
-   top-ranked pair would find almost nothing. At most 5 pairs are queried; any dropped
-   pairs are logged.
+   top-ranked pair would find almost nothing. At most 5 pairs are queried (a rate-limit
+   bound, not a precision one — NVD allows 5 requests/30s unauthenticated); any dropped
+   pairs are logged, never silently discarded.
+
+   **Editions and product families are included.** NVD files enterprise software under a
+   separate product per edition, so a query also admits any product in the *same vendor's
+   namespace* whose name extends the target: "Confluence" reaches
+   `atlassian:confluence_server` and `atlassian:confluence_data_center`, "Jira" reaches
+   `jira_service_desk`, `jira_software_data_center` and `jira_service_management`. A
+   third party's lookalike does not — `redhat:kubernetes-client` is not Kubernetes, and
+   `perforce:gliffy` is not Confluence. The bias is deliberate: an extra CVE in the list
+   is visible and dismissible, a missing one is neither.
 3. **Keyword fallback.** If the product cannot be resolved at all, `discover` falls back
    to NVD full-text search. This is materially weaker — it matches CVE *descriptions*, so
    it is both noisy and incomplete. The result reports which path ran:

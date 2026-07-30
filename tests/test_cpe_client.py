@@ -131,12 +131,14 @@ def test_edition_variants_are_included(variant: str, query: str, cves_hidden: in
         ("questions_for_confluence", "Confluence"),
     ],
 )
-def test_components_are_not_treated_as_editions(neighbour: str, query: str) -> None:
-    """The edition list is narrow on purpose.
+def test_components_under_a_foreign_vendor_are_excluded(neighbour: str, query: str) -> None:
+    """Vendor namespace is the boundary, and these sit outside it.
 
-    A looser suffix set swept these in during measurement. A false positive here
-    silently attributes another product's CVEs to this one, which is the same
-    class of error as the false negative it fixes.
+    Note the fixture puts each neighbour under a *different* vendor. The same
+    names under the product's own vendor (``atlassian:jira_core``) are included
+    deliberately — a vendor's own family is plausibly deployed alongside the
+    product, and a visible extra CVE is cheaper than a silent miss. A foreign
+    vendor's lookalike is a genuinely different product.
     """
     base = query.lower()
     client = _client(
@@ -146,6 +148,59 @@ def test_components_are_not_treated_as_editions(neighbour: str, query: str) -> N
         )
     )
     assert client.resolve(query) == [("acme", base)]
+
+
+def test_same_vendor_editions_are_included_without_an_allowlist() -> None:
+    """Jira's editions are the case an enumerated suffix list could not cover.
+
+    2.4.1 matched editions via a fixed list (`_server`, `_data_center`, ...),
+    which only ever contains the suffixes someone thought of. Jira ships
+    `jira_service_desk` and `jira_software_data_center`, and both were dropped.
+    Vendor namespace is the structural signal instead.
+    """
+    client = _client(
+        _products(
+            "cpe:2.3:a:atlassian:jira:8.0:*:*:*:*:*:*:*",
+            "cpe:2.3:a:atlassian:jira_service_desk:4.0:*:*:*:*:*:*:*",
+            "cpe:2.3:a:atlassian:jira_software_data_center:8.0:*:*:*:*:*:*:*",
+            "cpe:2.3:a:atlassian:jira_core:8.0:*:*:*:*:*:*:*",
+        )
+    )
+    assert sorted(p for _v, p in client.resolve("Jira")) == [
+        "jira", "jira_core", "jira_service_desk", "jira_software_data_center",
+    ]
+
+
+def test_foreign_vendor_lookalikes_stay_excluded() -> None:
+    """A vendor's own namespace is the boundary.
+
+    `redhat:kubernetes-client` extends the target name but belongs to someone
+    else, so it is a different product — including it would attribute Red Hat's
+    CVEs to Kubernetes.
+    """
+    client = _client(
+        _products(
+            "cpe:2.3:a:kubernetes:kubernetes:1.0:*:*:*:*:*:*:*",
+            "cpe:2.3:a:redhat:kubernetes-client:1.0:*:*:*:*:*:*:*",
+            "cpe:2.3:a:kubernetes:minikube:1.0:*:*:*:*:*:*:*",
+        )
+    )
+    assert client.resolve("Kubernetes") == [("kubernetes", "kubernetes")]
+
+
+def test_same_vendor_non_prefix_products_stay_excluded() -> None:
+    """`questions_for_confluence` shares Atlassian's namespace but is an add-on."""
+    client = _client(
+        _products(
+            "cpe:2.3:a:atlassian:confluence:7.0:*:*:*:*:*:*:*",
+            "cpe:2.3:a:atlassian:confluence_server:7.0:*:*:*:*:*:*:*",
+            "cpe:2.3:a:atlassian:questions_for_confluence:2.0:*:*:*:*:*:*:*",
+            "cpe:2.3:a:perforce:gliffy:1.0:*:*:*:*:*:*:*",
+        )
+    )
+    assert sorted(p for _v, p in client.resolve("Confluence")) == [
+        "confluence", "confluence_server",
+    ]
 
 
 def test_resolve_falls_back_to_neighbours_when_nothing_matches_exactly() -> None:

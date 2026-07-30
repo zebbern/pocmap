@@ -1,6 +1,6 @@
 {
   "name": "PocMap",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "description": "MCP Server for CVE lookup, exploit discovery, and vulnerability reporting. Enables AI agents to search for CVE details, find PoCs from GitHub/Metasploit/ExploitDB/Nuclei, discover bug bounty reports, find CTF labs, and generate vulnerability reports.",
   "author": "PocMap Team",
   "license": "MIT",

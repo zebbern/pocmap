@@ -42,52 +42,21 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
-# Suffixes that mark a deployment/packaging *edition* of the same product, so
-# ``confluence_server`` still answers a question about "Confluence".
-#
-# Deliberately narrow. Measured across 34 real products: this set recovers every
-# genuine edition variant found (Confluence, Bitbucket, Nextcloud, Redis) while
-# excluding the separate components a looser list swept in — ``kubernetes-client``,
-# ``nginx_agent`` and ``jira_core`` are not editions. Widen only with evidence:
-# a false positive here silently attributes another product's CVEs to this one.
-_EDITION_SUFFIXES: tuple[str, ...] = (
-    "server",
-    "datacenter",
-    "cloud",
-    "enterprise",
-    "standard",
-    "professional",
-    "community",
-)
-
-
 def _is_exact_product(cpe_product: str, target: str) -> bool:
-    """Whether *cpe_product* names the queried product rather than a neighbour.
+    """Whether *cpe_product* names the queried product by name.
 
     The query often still carries the vendor ("Fortinet FortiOS" -> target
-    ``fortinetfortios``), so a trailing match counts as exact.
+    ``fortinetfortios``), so a trailing match counts.
 
-    Edition variants count too. NVD files enterprise software under separate
-    products per edition, and matching only the bare name hid them: "Confluence"
-    resolved to ``atlassian:confluence`` (19 CVEs, newest 2020) while
-    ``confluence_server`` (50) and ``confluence_data_center`` (37) went
-    unqueried — a false negative that reads as "you are patched". Nextcloud was
-    worse: 189 CVEs sat under ``nextcloud_server``.
-
-    Arbitrary prefix matches still do not count: ``nginx_ingress_controller``
-    is a different product from ``nginx``.
+    Edition variants (``confluence_server``) are *not* decided here — they need
+    the vendor for context, so :meth:`CPEDictionaryClient.resolve` admits them
+    separately. A bare prefix rule at this level would treat
+    ``nginx_ingress_controller`` as nginx.
     """
     product_slug = _slug(cpe_product)
     if not product_slug:
         return False
-    if product_slug == target or target.endswith(product_slug):
-        return True
-    for suffix in _EDITION_SUFFIXES:
-        if product_slug.endswith(suffix):
-            base = product_slug[: -len(suffix)]
-            if base and (base == target or target.endswith(base)):
-                return True
-    return False
+    return product_slug == target or target.endswith(product_slug)
 
 
 class CPEDictionaryClient:
@@ -159,6 +128,25 @@ class CPEDictionaryClient:
             return []
 
         exact = {p: c for p, c in counts.items() if _is_exact_product(p[1], target)}
+        # Editions and same-family components live in the vendor's own
+        # namespace, so admit any product that *extends* the target under a
+        # vendor already known to publish it. This is what recovers
+        # atlassian:jira_service_desk and atlassian:jira_software_data_center,
+        # which an enumerated suffix list could only cover if someone had
+        # thought of "service_desk" in advance.
+        if exact:
+            owners = {vendor for vendor, _ in exact}
+            family = {
+                p: c
+                for p, c in counts.items()
+                if p not in exact and p[0] in owners and _slug(p[1]).startswith(target)
+            }
+            if family:
+                logger.debug(
+                    "Including %d same-vendor product(s) for %r: %s",
+                    len(family), product, [f"{v}:{n}" for v, n in family],
+                )
+            exact = {**exact, **family}
         # Only fall back to neighbours ("nginx_ingress_controller") when nothing
         # matches the product name outright.
         candidates = exact or counts

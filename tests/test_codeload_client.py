@@ -428,6 +428,57 @@ def test_archive_permissions_are_normalized(tmp_path: Path, enabled: None) -> No
     assert not mode & 0o4000, "setuid bit survived extraction"
 
 
+def test_falls_back_to_head_for_a_non_standard_default_branch(
+    tmp_path: Path, enabled: None
+) -> None:
+    """Not every repo defaults to main or master.
+
+    Karmakstylez/CVE-2024-6387 (187 stars) defaults to `production` and was
+    unreachable, surfacing as a fetch error that silently dropped a real PoC.
+    `HEAD` resolves whatever the default actually is.
+    """
+    blob = _tar_bytes({"repo/exploit.py": b"x"})
+    http = MagicMock()
+    tried: list[str] = []
+
+    def fake_get(url: str, **_: Any) -> Any:
+        tried.append(url.rsplit("/tar.gz/", 1)[-1])
+        if not url.endswith("/HEAD"):
+            raise HTTPError("404", status_code=404)
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.iter_content.return_value = [blob]
+        return resp
+
+    http.get.side_effect = fake_get
+    client = CodeloadClient(http_client=http, dest_root=tmp_path / "poc-source")
+
+    src = client.fetch("owner", "repo")
+    assert src.branch == "HEAD"
+    assert tried == ["refs/heads/main", "refs/heads/master", "HEAD"]
+
+
+def test_head_is_tried_last_so_common_repos_cost_one_request(
+    tmp_path: Path, enabled: None
+) -> None:
+    http = MagicMock()
+    tried: list[str] = []
+    blob = _tar_bytes({"repo/exploit.py": b"x"})
+
+    def fake_get(url: str, **_: Any) -> Any:
+        tried.append(url.rsplit("/tar.gz/", 1)[-1])
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.iter_content.return_value = [blob]
+        return resp
+
+    http.get.side_effect = fake_get
+    client = CodeloadClient(http_client=http, dest_root=tmp_path / "poc-source")
+
+    assert client.fetch("owner", "repo").branch == "main"
+    assert tried == ["refs/heads/main"]
+
+
 def test_total_budget_evicts_oldest_first(
     tmp_path: Path, enabled: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
