@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-07-30
+
 ### Added
 - **`pocmap-mcp` console script.** The MCP server now lives in `pocmap.mcp_server`
   and is exposed as `pocmap-mcp`, so Claude Desktop / MCP clients can launch it with
@@ -129,6 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CVE/PoC/exploit-discovery toolkit: a Typer CLI, a FastMCP server exposing 19 tools,
   a synchronous Python API, and the bug-bounty toolkit (checklists, playbooks, scoring).
 
-[Unreleased]: https://github.com/zebbern/pocmap/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/zebbern/pocmap/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/zebbern/pocmap/releases/tag/v2.2.0
 [2.1.0]: https://github.com/zebbern/pocmap/releases/tag/v2.1.0
 [2.0.0]: https://github.com/zebbern/pocmap/releases/tag/v2.0.0
