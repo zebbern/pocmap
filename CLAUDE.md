@@ -4,6 +4,24 @@ PocMap is an AI-friendly CVE / PoC / exploit-discovery toolkit (CLI + MCP server
 This file covers how to **develop** the project. For how AI agents **consume** the MCP tools, see
 `AGENTS.md`. For full usage/API docs, see `README.md`.
 
+## Knowledge Freshness & Research Preferences (IMPORTANT!)
+
+Do **not** rely solely on your internal knowledge or training data when making implementation decisions. Your memory is frequently outdated.
+
+Before implementing anything non-trivial (especially integrations, tools, SDKs, platforms, AI agents, or architectural patterns):
+
+1. Actively look up the **latest** official documentation, release notes, changelogs, and recommended approaches.
+
+2. Check whether newer versions, official solutions, or better patterns already exist that would change how the task should be approached.
+
+3. Prefer using current best practices and existing tools over rebuilding something from scratch based on older knowledge.
+
+4. If there is any uncertainty about the current recommended way to do something, ask clarifying questions instead of defaulting to what you remember.
+
+**Why this matters:**  
+
+Defaulting to internal knowledge often leads to outdated implementations. For example, an agent might implement an older pattern for something like MCP or an AI agent integration simply because that is what it “knows,” without checking whether a newer release, official SDK, or simpler approach has become available. Always verify first.
+
 ## Commands
 - Install (PyPI): `pip install "pocmap[server]"` (omit `[server]` for CLI-only)
 - Install (dev clone): `pip install -e ".[server,dev]"` (pytest, mypy, ruff + the MCP SDK)
