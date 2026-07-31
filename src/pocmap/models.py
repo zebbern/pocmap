@@ -21,7 +21,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 # ``typing.Self`` only exists on Python 3.11+; fall back to typing_extensions
 # (always present as a pydantic dependency) so the package imports on 3.10.
@@ -304,9 +304,17 @@ class PackageVulnerability(BaseModel):
         """Accept a string or numeric EPSS from upstream."""
         return _coerce_optional_float(value)
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def has_fix(self) -> bool:
-        """Whether at least one fixed release is published for this package."""
+        """Whether at least one fixed release is published for this package.
+
+        A ``computed_field`` rather than a plain property so it survives
+        ``model_dump()``. As a bare property it was absent from the CLI's
+        ``--format json`` and from the exported JSON Schema, while the MCP
+        normalizer re-added it by hand — so the two surfaces disagreed and a
+        script written against the documented shape raised ``KeyError``.
+        """
         return bool(self.fixed_versions)
 
 
@@ -865,7 +873,11 @@ def export_schemas(output_dir: str | Path) -> list[Path]:
 
     written: list[Path] = []
     for model in models:
-        schema = model.model_json_schema()
+        # Serialization mode: these schemas describe what a consumer *receives*,
+        # so computed fields (PackageVulnerability.has_fix) belong in them. The
+        # default validation mode omits them, which made the exported schema
+        # disagree with the actual payload.
+        schema = model.model_json_schema(mode="serialization")
         path = out / f"{model.__name__}.json"
         path.write_text(json.dumps(schema, indent=2), encoding="utf-8")
         written.append(path)
