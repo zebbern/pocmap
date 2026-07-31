@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.5] - 2026-07-31
+
+Found by looking up CVE-2026-26832, a CRITICAL 9.8 OS command injection that pocmap
+reported as affecting `n/a / n/a`.
+
+### Fixed
+
+- **CNA placeholder values no longer reach the user.** A CNA may file a record with literal
+  `"vendor": "n/a", "product": "n/a"` — 12% of a 180-CVE sample from cvelistV5 do. pocmap
+  printed that verbatim, so a critical command injection named no product at all. Those
+  placeholders (`n/a`, `na`, `unknown`, `not applicable`, `-`) are now treated as absent, and
+  NVD is consulted to fill the gap: CVE-2026-26832 resolves to `zapolnoch / tesseract_ocr`.
+  Measured on the live sample, NVD resolves 4 of 5 such records that are not themselves
+  Rejected.
+- **`affected_products` is now populated.** It was always an empty list from `CVEService`,
+  despite `AGENTS.md` telling agents to check it rather than the scalar `vendor`/`product`.
+  It is built from every entry in the CVE.org record — free, since that record is already
+  fetched — so CVE-2024-3094 now reports both `tukaani / xz` and the distributions that
+  shipped it.
+
+### Changed
+
+- The NVD fallback costs **at most one** extra request, fires only when CVE.org actually
+  left a gap, and **supplements rather than overwrites**: CVE.org's names are the ones the
+  advisory uses (`Apache Software Foundation / Apache Log4j2`) where NVD carries the CPE
+  slug (`apache / log4j2`). A throttled or unavailable NVD leaves the CVE.org data intact
+  instead of failing the lookup.
+
 ## [2.6.4] - 2026-07-31
 
 ### Fixed

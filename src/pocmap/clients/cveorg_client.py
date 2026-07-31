@@ -117,6 +117,15 @@ class CVEOrgClient:
             "affected_product": (
                 (affected.get("product") or affected.get("packageName")) if affected else None
             ),
+            # EVERY affected entry, not just the first. A CVE normally names the
+            # vulnerable component plus each distribution that shipped it, and
+            # judging "does this affect X" by one pair misses the rest. Free —
+            # it is already in the record we fetched.
+            "affected_products": [
+                (str(a.get("vendor") or ""), str(a.get("product") or a.get("packageName") or ""))
+                for a in affected_list
+                if (a.get("product") or a.get("packageName"))
+            ],
         }
 
         # Handle rejected CVEs

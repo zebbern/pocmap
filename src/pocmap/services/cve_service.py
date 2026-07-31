@@ -19,7 +19,14 @@ from typing import Any
 from pocmap.clients.attack_client import ATTACKClient
 from pocmap.clients.cveorg_client import CVEOrgClient
 from pocmap.clients.nvd_client import NVDClient
-from pocmap.models import ATTACKTechnique, CPEInfo, CVEInfo, CVEState, CVSSScore
+from pocmap.models import (
+    AffectedProduct,
+    ATTACKTechnique,
+    CPEInfo,
+    CVEInfo,
+    CVEState,
+    CVSSScore,
+)
 from pocmap.utils.http import (
     OfflineError,
     RateLimitError,
@@ -29,6 +36,42 @@ from pocmap.utils.http import (
 from pocmap.utils.validators import validate_cve_id as _validate_cve_id
 
 logger = logging.getLogger(__name__)
+
+
+# Placeholders CNAs file when they will not name a product. Treated as absent
+# rather than shown verbatim: "n/a" in a vendor column tells a reader nothing,
+# and it hides the fact that NVD often does know the answer.
+_PLACEHOLDER_NAMES = frozenset({"n/a", "na", "unknown", "not applicable", "-"})
+
+
+def _blank_to_none(value: object) -> str | None:
+    """Normalize a CNA-supplied name, collapsing placeholders to ``None``."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return None if not text or text.lower() in _PLACEHOLDER_NAMES else text
+
+
+def _affected_from_nvd(nvd_record: dict[str, Any]) -> list[AffectedProduct]:
+    """Derive ``(vendor, product)`` pairs from an NVD record's CPE matches.
+
+    Order is preserved and duplicates dropped, so the first pair is the one NVD
+    lists first — the vulnerable component rather than a distro that shipped it.
+    """
+    seen: set[tuple[str, str]] = set()
+    pairs: list[AffectedProduct] = []
+    for config in nvd_record.get("configurations") or []:
+        for node in config.get("nodes") or []:
+            for match in node.get("cpeMatch") or []:
+                parts = str(match.get("criteria", "")).split(":")
+                if len(parts) < 5:
+                    continue
+                pair = (parts[3], parts[4])
+                if not all(pair) or "*" in pair or pair in seen:
+                    continue
+                seen.add(pair)
+                pairs.append(AffectedProduct(vendor=pair[0], product=pair[1]))
+    return pairs
 
 
 class CVEService:
@@ -161,9 +204,45 @@ class CVEService:
         # Build CVSS from CVE.org record
         cvss = self._build_cvss(record)
 
-        # Fallback to NVD if CVE.org had no CVSS
-        if cvss.base_score is None:
-            cvss = self._fetch_nvd_cvss(cve_id)
+        # NVD fills whatever CVE.org left blank. Fetched at most once and only
+        # when something is actually missing, because NVD allows 5 requests /
+        # 30s unauthenticated and most CVEs need no fallback at all.
+        vendor = _blank_to_none(record.get("vendor"))
+        product = _blank_to_none(record.get("affected_product"))
+        cwes: list[str] = list(record.get("cwe") or [])
+        # CVE.org already listed every affected entry — use it before spending an
+        # NVD request. NVD only supplements when this comes back empty.
+        affected: list[AffectedProduct] = []
+        for raw_vendor, raw_product in record.get("affected_products") or []:
+            named_product = _blank_to_none(raw_product)
+            if named_product is None:
+                continue
+            affected.append(
+                AffectedProduct(
+                    vendor=_blank_to_none(raw_vendor) or "N/A", product=named_product
+                )
+            )
+
+        if cvss.base_score is None or not cwes or (vendor is None and product is None):
+            nvd_record = self._safe_nvd_record(cve_id)
+            if nvd_record is not None:
+                if cvss.base_score is None:
+                    cvss = self._nvd.extract_cvss(nvd_record)
+                if not cwes:
+                    cwes = self._nvd.extract_cwes(nvd_record)
+                # A CNA may file literal "n/a" placeholders (12% of a 180-CVE
+                # sample). NVD's CPE data usually names the real product —
+                # CVE-2026-26832 is "n/a / n/a" at CVE.org and
+                # zapolnoch:tesseract_ocr at NVD.
+                #
+                # Supplement, never overwrite: CVE.org is the authoritative CNA
+                # record, and its names are the ones the advisory actually uses
+                # ("Apache Software Foundation / Apache Log4j2"), where NVD
+                # carries the CPE slug ("apache / log4j2").
+                if not affected:
+                    affected = _affected_from_nvd(nvd_record)
+                if vendor is None and product is None and affected:
+                    vendor, product = affected[0].vendor, affected[0].product
 
         # Get EPSS score
         epss = self._cveorg.get_epss(cve_id)
@@ -187,10 +266,11 @@ class CVEService:
             cvss=cvss,
             epss=epss,
             kev_status=is_kev,
-            cwes=record.get("cwe", []),
+            cwes=cwes,
             references=references,
-            vendor=record.get("vendor") or "N/A",
-            product=record.get("affected_product") or "N/A",
+            vendor=vendor or "N/A",
+            product=product or "N/A",
+            affected_products=affected,
             publication_date=self._format_date(record.get("publication_date")),
             state=CVEState.PUBLISHED,
             ransomware_usage=ransomware if ransomware != "N/A" else None,
@@ -283,6 +363,20 @@ class CVEService:
             severity=record.get("severity", "UNKNOWN"),
             vector_string=record.get("vector_string"),
         )
+
+    def _safe_nvd_record(self, cve_id: str) -> dict[str, Any] | None:
+        """Fetch the NVD record for gap-filling, degrading to ``None``.
+
+        NVD is a *supplement* here — CVE.org already answered. A throttled or
+        unavailable NVD must therefore leave the CVE.org data intact rather than
+        fail the whole lookup, which is why this swallows HTTP errors that the
+        primary path would re-raise.
+        """
+        try:
+            return self._nvd.get_cve(cve_id)
+        except Exception as exc:
+            logger.debug("NVD fallback unavailable for %s: %s", cve_id, exc)
+            return None
 
     def _fetch_nvd_cvss(self, cve_id: str) -> CVSSScore:
         """Fetch CVSS data from NVD as a fallback."""
