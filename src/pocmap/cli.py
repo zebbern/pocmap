@@ -83,7 +83,7 @@ from pocmap.utils.http import (
     OfflineError,
     ValidationError,
 )
-from pocmap.utils.output import OutputFormat, render
+from pocmap.utils.output import OutputFormat, render, render_to_string
 from pocmap.utils.paths import safe_path as _safe_path
 
 # Configure logging
@@ -161,6 +161,33 @@ def _emit_json_error(exc: Exception, *, category: str) -> None:
         OutputFormat.JSON,
         console=console,
     )
+
+
+def _output_payload(
+    fmt: OutputFormat,
+    *,
+    report_data: dict[str, object],
+    sarif_rows: list[dict[str, object]],
+    tabular_rows: list[dict[str, object]],
+    title: str,
+) -> str:
+    """Serialize a command's result for ``--output`` in the requested *fmt*.
+
+    ``--output`` used to write the JSON report no matter what ``--format`` said,
+    so ``--format sarif --output findings.sarif`` produced a file that was not
+    SARIF — and README's own snippets used exactly that form. The file now
+    matches the format. Stdout is unchanged, so existing pipelines still work.
+
+    ``table`` keeps writing the JSON report: a Rich table is for a terminal, and
+    a file of box-drawing characters is not something a caller can consume.
+    """
+    if fmt in (OutputFormat.TABLE, OutputFormat.JSON):
+        import json as _json
+
+        return _json.dumps(report_data, indent=2, default=str)
+    if fmt is OutputFormat.SARIF:
+        return render_to_string(sarif_rows, fmt)
+    return render_to_string(tabular_rows, fmt, title=title)
 
 
 def _resolve_output(
@@ -1471,7 +1498,6 @@ def latest(
         """Persist ``report_data`` to ``--output`` (unchanged JSON contract)."""
         if not output:
             return
-        import json as _json
         try:
             _safe_path(output)
         except ValueError as exc:
@@ -1479,7 +1505,19 @@ def latest(
             raise typer.Exit(ExitCode.INVALID_INPUT) from exc
         out_path = Path(output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(_json.dumps(report_data, indent=2, default=str), encoding="utf-8")
+        out_path.write_text(
+            _output_payload(
+                fmt,
+                report_data=report_data,
+                sarif_rows=[
+                    _cve_sarif_dict(r.cve_info, exploit_count=len(r.poc_sources))
+                    for r in results
+                ],
+                tabular_rows=cve_rows,
+                title="Recent CVEs",
+            ),
+            encoding="utf-8",
+        )
         # Keep the confirmation out of machine-readable streams.
         if fmt is OutputFormat.TABLE and not is_quiet:
             rprint(f"\n[green1]Report saved to {out_path}[/green1]")
@@ -1661,7 +1699,6 @@ def discover(
         """Persist ``report_data`` to ``--output`` (unchanged JSON contract)."""
         if not output:
             return
-        import json as _json
         try:
             _safe_path(output)
         except ValueError as exc:
@@ -1669,7 +1706,22 @@ def discover(
             raise typer.Exit(ExitCode.INVALID_INPUT) from exc
         output_path = Path(output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(_json.dumps(report_data, indent=2, default=str), encoding="utf-8")
+        output_path.write_text(
+            _output_payload(
+                fmt,
+                report_data=report_data,
+                sarif_rows=[
+                    _cve_sarif_dict(cve, exploit_count=None)
+                    for _tier, cves in tiers
+                    for cve in cves
+                ],
+                tabular_rows=[
+                    _discover_cve_row(cve, tier=tier) for tier, cves in tiers for cve in cves
+                ],
+                title=f"Product Discovery: {result.query}",
+            ),
+            encoding="utf-8",
+        )
         if fmt is OutputFormat.TABLE and not is_quiet:
             rprint(f"\n[green1]Report saved to {output_path}[/green1]")
 
@@ -1920,10 +1972,24 @@ def package(
         """Persist ``report_data`` to ``--output`` (path validated up front)."""
         if not output:
             return
-        import json as _json
         output_path = Path(output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(_json.dumps(report_data, indent=2, default=str), encoding="utf-8")
+        output_path.write_text(
+            _output_payload(
+                fmt,
+                report_data=report_data,
+                sarif_rows=[
+                    _package_sarif_dict(v, ecosystem=result.ecosystem, package=result.package)
+                    for v in vulns
+                ],
+                tabular_rows=[
+                    _package_vuln_row(v, ecosystem=result.ecosystem, package=result.package)
+                    for v in vulns
+                ],
+                title=f"{result.ecosystem}/{result.package}",
+            ),
+            encoding="utf-8",
+        )
         if fmt is OutputFormat.TABLE and not is_quiet:
             rprint(f"\n[green1]Report saved to {output_path}[/green1]")
 

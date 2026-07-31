@@ -242,3 +242,53 @@ def test_lookup_json_not_found_exits_not_found(
     assert result.exit_code == ExitCode.NOT_FOUND  # 3
     data = json.loads(result.stdout)
     assert data["category"] == "not_found"
+
+
+# ---------------------------------------------------------------------------
+# render_to_string — what --output writes
+# ---------------------------------------------------------------------------
+
+def test_render_to_string_matches_what_stdout_receives() -> None:
+    """The saved file must be byte-identical to the piped stream.
+
+    ``render_to_string`` originally referenced ``Console`` at runtime while the
+    module only imports it under ``TYPE_CHECKING`` — mypy was happy and every
+    test passed, but ``--output`` raised NameError for csv/md/sarif in the wild.
+    Comparing against a real render is what catches that.
+    """
+    import io
+
+    from rich.console import Console
+
+    from pocmap.utils.output import OutputFormat, render, render_to_string
+
+    rows = [
+        {"id": "CVE-2021-44228", "severity": "CRITICAL", "cvss": 10.0, "epss": 99.99},
+        {"id": "CVE-2019-11358", "severity": "MEDIUM", "cvss": 6.1, "epss": 3.0},
+    ]
+    for fmt in (OutputFormat.JSON, OutputFormat.CSV, OutputFormat.MARKDOWN):
+        buf = io.StringIO()
+        render(rows, fmt, console=Console(file=buf, width=10_000), title="T")
+        assert render_to_string(rows, fmt, title="T") == buf.getvalue(), fmt
+
+
+def test_render_to_string_produces_valid_sarif() -> None:
+    """SARIF is the format --output was silently getting wrong."""
+    import json
+
+    from pocmap.utils.output import OutputFormat, render_to_string
+
+    rows = [{"id": "CVE-2021-44228", "severity": "CRITICAL", "cvss": 10.0}]
+    doc = json.loads(render_to_string(rows, OutputFormat.SARIF))
+
+    assert doc["version"] == "2.1.0"
+    assert doc["runs"][0]["results"][0]["ruleId"] == "CVE-2021-44228"
+
+
+def test_render_to_string_emits_no_ansi_escapes() -> None:
+    """A file full of terminal colour codes is not machine-readable."""
+    from pocmap.utils.output import OutputFormat, render_to_string
+
+    rows = [{"id": "CVE-2021-44228", "severity": "CRITICAL", "cvss": 10.0}]
+    for fmt in (OutputFormat.JSON, OutputFormat.CSV, OutputFormat.MARKDOWN, OutputFormat.SARIF):
+        assert "\x1b[" not in render_to_string(rows, fmt), fmt

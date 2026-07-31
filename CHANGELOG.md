@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.4] - 2026-07-31
+
+### Fixed
+
+- **`--output` now writes the format `--format` asked for.** It previously always wrote a
+  JSON report, so `pocmap package … --format sarif --output findings.sarif` produced a file
+  that was not SARIF, and `latest --format sarif --output out/` wrote plain JSON while SARIF
+  went to stdout. Three README snippets used exactly that form. `latest`, `discover` and
+  `package` now honour `json`, `csv`, `md` and `sarif` on the saved file; `--format table`
+  keeps writing the JSON report, since a file of box-drawing characters is not consumable.
+  **Stdout is unchanged**, so existing pipelines keep working.
+- README's CI snippet used `bulk --format sarif --output out/`, which writes no files by
+  design (machine formats keep stdout parseable). It now redirects stdout, matching the
+  already-correct `examples/ci-github-actions.yml`.
+
 ## [2.6.3] - 2026-07-31
 
 Found by using the published package the way a new user would, from a clean install.

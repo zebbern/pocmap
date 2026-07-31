@@ -49,6 +49,7 @@ Example::
 
 from __future__ import annotations
 
+import io
 import json
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -58,7 +59,7 @@ from pocmap.utils.renderers import render_csv, render_markdown, render_sarif
 if TYPE_CHECKING:
     from rich.console import Console
 
-__all__ = ["OutputFormat", "render"]
+__all__ = ["OutputFormat", "render", "render_to_string"]
 
 
 class OutputFormat(str, Enum):
@@ -90,6 +91,32 @@ def _write_raw(text: str, console: Console) -> None:
     if text and not text.endswith("\n"):
         text += "\n"
     console.file.write(text)
+
+
+def render_to_string(
+    data: Any,
+    fmt: OutputFormat,
+    *,
+    title: str | None = None,
+) -> str:
+    """Render *data* in *fmt* and return it as text instead of printing it.
+
+    Used by ``--output`` so a saved file is in the format the caller asked for.
+    Previously ``--output`` always wrote a JSON report regardless of ``--format``,
+    so ``--format sarif --output x.sarif`` produced a file that was not SARIF.
+
+    The buffer-backed console is not a terminal, so Rich emits no ANSI; JSON goes
+    through the same ``soft_wrap``/``emoji=False`` path as stdout, and csv/md/sarif
+    bypass Rich entirely via :func:`_write_raw`. Byte-for-byte identical to what
+    stdout would receive.
+    """
+    # Imported here, not at module scope: the module-level ``Console`` import is
+    # under TYPE_CHECKING, so referencing it at runtime raises NameError.
+    from rich.console import Console
+
+    buffer = io.StringIO()
+    render(data, fmt, console=Console(file=buffer, width=10_000), title=title)
+    return buffer.getvalue()
 
 
 def render(

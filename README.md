@@ -1,6 +1,6 @@
 # PocMap
 
-[![Version](https://img.shields.io/badge/version-2.6.3-blue.svg)](https://github.com/zebbern/pocmap)
+[![Version](https://img.shields.io/badge/version-2.6.4-blue.svg)](https://github.com/zebbern/pocmap)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2-purple.svg)](https://docs.pydantic.dev/)
@@ -865,7 +865,7 @@ choose a machine format, and use `--fail-on` to fail the build on a policy match
 ```bash
 # Fail the build (exit 6) if any dependency CVE is in the CISA KEV catalog,
 # and write a SARIF log for GitHub code scanning.
-pocmap bulk cves.txt --format sarif --output out/ --fail-on kev
+pocmap bulk cves.txt --format sarif --fail-on kev > out/pocmap.sarif
 
 # Pipe CVE IDs straight from another tool
 grep -oE 'CVE-[0-9]{4}-[0-9]+' sbom.txt | pocmap bulk - --format json --fail-on critical
