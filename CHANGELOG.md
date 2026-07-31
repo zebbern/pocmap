@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.6] - 2026-07-31
+
+### Fixed
+
+- **The CVE's own reference URLs are no longer discarded.** `get_references` synthesized an
+  NVD link, a CVEdetails link and a scraped GHSA link, and ignored the reference list the
+  CNA actually published. For CVE-2026-26832 that meant losing the npm package page, the
+  exact vulnerable source file (`src/index.js`), and the advisory writeup — the three links
+  a responder would open first. All CNA references are now merged in, labelled by their
+  `tags` (`Patch`, `Vendor Advisory`, `Exploit`), then by `name`, then by host.
+  References sharing a label no longer overwrite one another, so two patch commits stay two
+  links.
+
 ## [2.6.5] - 2026-07-31
 
 Found by looking up CVE-2026-26832, a CRITICAL 9.8 OS command injection that pocmap

@@ -117,6 +117,18 @@ class CVEOrgClient:
             "affected_product": (
                 (affected.get("product") or affected.get("packageName")) if affected else None
             ),
+            # The CNA's own reference list — the vendor advisory, the patch
+            # commit, the exact vulnerable source file. Far more actionable than
+            # the synthesized NVD/CVEdetails links, and previously discarded.
+            "references": [
+                {
+                    "url": str(r.get("url") or ""),
+                    "name": str(r.get("name") or ""),
+                    "tags": [str(t) for t in (r.get("tags") or [])],
+                }
+                for r in (cna.get("references") or [])
+                if r.get("url")
+            ],
             # EVERY affected entry, not just the first. A CVE normally names the
             # vulnerable component plus each distribution that shipped it, and
             # judging "does this affect X" by one pair misses the rest. Free —

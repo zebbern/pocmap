@@ -143,3 +143,54 @@ def test_unavailable_nvd_leaves_cve_org_data_intact() -> None:
 
     assert info.id == "CVE-2026-26832"
     assert (info.vendor, info.product) == ("N/A", "N/A")
+
+
+# ---------------------------------------------------------------------------
+# The CNA's own reference list
+# ---------------------------------------------------------------------------
+
+def test_cna_references_are_labelled_by_tag_then_name_then_host() -> None:
+    """pocmap synthesized NVD/CVEdetails links and dropped the real ones.
+
+    For CVE-2026-26832 that discarded the npm package page, the exact vulnerable
+    source file, and the advisory writeup — all cited by the CNA — in favour of a
+    generic cvedetails URL.
+    """
+    from pocmap.services.cve_service import _cna_references
+
+    out = _cna_references([
+        {"url": "https://vendor.example/adv", "name": "", "tags": ["vendor-advisory"]},
+        {"url": "https://example.com/c1", "name": "", "tags": ["patch", "x_refsource_CONFIRM"]},
+        {"url": "https://www.npmjs.com/package/x", "name": "", "tags": []},
+        {"url": "https://host/z", "name": "Upstream fix", "tags": []},
+    ])
+
+    assert out["Vendor Advisory"] == "https://vendor.example/adv"
+    assert out["Patch"] == "https://example.com/c1"          # x_refsource_* ignored
+    assert out["npmjs.com"] == "https://www.npmjs.com/package/x"  # no "Www.Npmjs.Com"
+    assert out["Upstream Fix"] == "https://host/z"
+
+
+def test_same_label_references_do_not_overwrite_each_other() -> None:
+    """Two patch commits are two links, not one."""
+    from pocmap.services.cve_service import _cna_references
+
+    out = _cna_references([
+        {"url": "https://example.com/commit1", "name": "", "tags": ["patch"]},
+        {"url": "https://example.com/commit2", "name": "", "tags": ["patch"]},
+    ])
+
+    assert sorted(out.values()) == ["https://example.com/commit1", "https://example.com/commit2"]
+
+
+def test_cna_references_skips_empty_urls_and_dedupes_identical_ones() -> None:
+    from pocmap.services.cve_service import _cna_references
+
+    out = _cna_references([
+        {"url": "", "name": "", "tags": ["patch"]},
+        {"url": "   ", "name": "", "tags": []},
+        {"url": "https://example.com/a", "name": "", "tags": ["patch"]},
+        {"url": "https://example.com/a", "name": "", "tags": ["patch"]},
+    ])
+
+    assert out == {"Patch": "https://example.com/a"}

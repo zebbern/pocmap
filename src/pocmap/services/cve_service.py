@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 from pocmap.clients.attack_client import ATTACKClient
 from pocmap.clients.cveorg_client import CVEOrgClient
@@ -72,6 +73,38 @@ def _affected_from_nvd(nvd_record: dict[str, Any]) -> list[AffectedProduct]:
                 seen.add(pair)
                 pairs.append(AffectedProduct(vendor=pair[0], product=pair[1]))
     return pairs
+
+
+def _cna_references(raw_refs: list[dict[str, Any]]) -> dict[str, str]:
+    """Label the CNA's own reference URLs for display.
+
+    These are the links the advisory actually cites — the vendor bulletin, the
+    patch commit, the vulnerable file — and they were being dropped in favour of
+    synthesized NVD/CVEdetails URLs. Labels come from the reference's ``tags``
+    (``patch``, ``vendor-advisory``, ``exploit``) or its ``name``, falling back
+    to the host, so a reader can tell a patch from a writeup without opening it.
+    """
+    labelled: dict[str, str] = {}
+    for ref in raw_refs:
+        url = str(ref.get("url") or "").strip()
+        if not url:
+            continue
+        tags = [t for t in ref.get("tags") or [] if t and not t.startswith("x_refsource")]
+        label = (tags[0] if tags else "") or str(ref.get("name") or "").strip()
+        if label:
+            # "vendor-advisory" -> "Vendor Advisory"
+            label = label.replace("-", " ").replace("_", " ").title()
+        else:
+            # Fall back to the host, kept lowercase — "Www.Npmjs.Com" reads as a
+            # bug, and the bare domain is what a reader recognizes.
+            label = (urlparse(url).netloc or "reference").removeprefix("www.")
+        # Keep every URL: same-label references (two patch commits) would
+        # otherwise silently overwrite each other.
+        key, n = label, 2
+        while key in labelled and labelled[key] != url:
+            key, n = f"{label} ({n})", n + 1
+        labelled[key] = url
+    return labelled
 
 
 class CVEService:
@@ -252,6 +285,7 @@ class CVEService:
 
         # Get references
         references = self._cveorg.get_references(cve_id, kev_record if is_kev else None)
+        references.update(_cna_references(record.get("references") or []))
 
         # Check ransomware usage
         ransomware = self._cveorg.get_ransomware_usage(cve_id)
