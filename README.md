@@ -1,6 +1,6 @@
 # PocMap
 
-[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)](https://github.com/zebbern/pocmap)
+[![Version](https://img.shields.io/badge/version-2.6.0-blue.svg)](https://github.com/zebbern/pocmap)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2-purple.svg)](https://docs.pydantic.dev/)
@@ -971,7 +971,7 @@ git checkout). See also [`examples/mcp-config.json`](examples/mcp-config.json).
 | `find_exploitdb_entry` | Exploits | ExploitDB entry with searchsploit command |
 | `find_nuclei_template` | Exploits | Nuclei scanner template for detection/verification |
 | `find_bug_bounty_reports` | Research | Bug bounty write-ups from HackerOne, PentesterLand |
-| `find_practice_labs` | Labs | CTF labs on Vulhub, HackTheBox, TryHackMe |
+| `find_practice_labs` | Labs | CTF labs on Vulhub and HackTheBox |
 | `find_vulhub_docker` | Labs | Vulhub Docker Compose environment with setup steps |
 | `find_recent_exploits` | Discovery | Recently published CVEs with PoC/KEV/severity filters |
 | `discover_product_cves` | Discovery | Find CVEs by product name with version constraints |

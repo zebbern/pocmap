@@ -132,16 +132,31 @@ def registered_tools() -> list[dict[str, Any]]:
     return list(json.loads(proc.stdout))
 
 
-def test_no_tool_advertises_a_vacuous_result_string_schema(
+def test_every_tool_advertises_a_real_object_schema(
     registered_tools: list[dict[str, Any]],
 ) -> None:
-    """`-> str` made the SDK derive `{"result": {"type": "string"}}` for all 22.
+    """Tools return objects, so the schema must describe an object.
 
-    That schema describes none of the payload, and the SDK additionally wrapped
-    the already-JSON body as `structuredContent: {"result": "<json string>"}` —
-    encoded twice. Declaring no output schema is strictly more honest.
+    While they were annotated ``-> str`` the SDK derived
+    ``{"result": {"type": "string"}}`` and wrapped the already-JSON body as
+    ``structuredContent: {"result": "<json string>"}`` — encoded twice, behind a
+    schema describing none of it.
     """
-    offenders = [t["name"] for t in registered_tools if t["outputSchema"]]
+    for tool in registered_tools:
+        schema = tool["outputSchema"]
+        assert schema, f"{tool['name']} advertises no output schema"
+        assert schema.get("type") == "object", (tool["name"], schema)
+
+
+def test_no_tool_still_advertises_the_vacuous_result_wrapper(
+    registered_tools: list[dict[str, Any]],
+) -> None:
+    """The specific regression: a `{"result": {"type": "string"}}` schema."""
+    offenders = [
+        t["name"]
+        for t in registered_tools
+        if "result" in ((t["outputSchema"] or {}).get("properties") or {})
+    ]
     assert offenders == [], offenders
 
 

@@ -125,10 +125,6 @@ VULHUB_TOML_URL: Final[str] = (
     "https://raw.githubusercontent.com/vulhub/vulhub/refs/heads/master/environments.toml"
 )
 HTB_TAGS_URL: Final[str] = "https://0xdf.gitlab.io/tags"
-THM_ROOMS_URL: Final[str] = (
-    "https://raw.githubusercontent.com/zebbern/pocmap/refs/heads/main"
-    "/latest_thm_rooms.txt"
-)
 H1_REPORTS_URL: Final[str] = (
     "https://raw.githubusercontent.com/reddelexc/hackerone-reports"
     "/refs/heads/master/data.csv"

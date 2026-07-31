@@ -107,7 +107,7 @@ def test_lookup_cve_not_found_category(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(mcp_server._svc._cve, "get_cve_info", _raise_not_found)
 
-    result = json.loads(mcp_server.lookup_cve("CVE-2021-44228"))
+    result = mcp_server.lookup_cve("CVE-2021-44228")
     assert result["category"] == "not_found"
     assert result["cve_id"] == "CVE-2021-44228"
     # Full AGENTS.md error envelope: error_type present, retryable False, context set.
@@ -122,7 +122,7 @@ def test_lookup_cve_rate_limited_envelope(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(mcp_server._svc._cve, "get_cve_info", _raise_rate_limit)
 
-    result = json.loads(mcp_server.lookup_cve("CVE-2021-44228"))
+    result = mcp_server.lookup_cve("CVE-2021-44228")
     # Full envelope routed through categorize_exception's shared taxonomy.
     assert result["category"] == "rate_limited"
     assert result["retryable"] is True
@@ -136,17 +136,17 @@ def test_lookup_cve_non_notfound_category(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(mcp_server._svc._cve, "get_cve_info", _raise_value)
 
-    result = json.loads(mcp_server.lookup_cve("CVE-2021-44228"))
+    result = mcp_server.lookup_cve("CVE-2021-44228")
     assert result["category"] == "invalid_input"
 
 
 def test_format_error_json_uses_shared_taxonomy() -> None:
-    rate = json.loads(mcp_server._format_error_json(RateLimitError("x"), "ctx"))
+    rate = mcp_server._format_error_json(RateLimitError("x"), "ctx")
     assert rate["category"] == "rate_limited"
     assert rate["retryable"] is True
     assert (rate["category"], rate["retryable"]) == categorize_exception(RateLimitError("x"))
 
-    offline = json.loads(mcp_server._format_error_json(OfflineError("x"), "ctx"))
+    offline = mcp_server._format_error_json(OfflineError("x"), "ctx")
     assert offline["category"] == "offline"
     assert offline["retryable"] is False
     assert (offline["category"], offline["retryable"]) == categorize_exception(OfflineError("x"))
@@ -165,7 +165,7 @@ def test_cve_to_cpe_rate_limited_envelope(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(mcp_server._svc._cve, "get_cpes", _raise)
 
-    result = json.loads(mcp_server.cve_to_cpe("CVE-2021-44228"))
+    result = mcp_server.cve_to_cpe("CVE-2021-44228")
     assert result["category"] == "rate_limited"
     assert result["retryable"] is True
     assert result["error_type"] == "RateLimitError"
@@ -178,7 +178,7 @@ def test_cve_to_cpe_offline_envelope(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(mcp_server._svc._cve, "get_cpes", _raise)
 
-    result = json.loads(mcp_server.cve_to_cpe("CVE-2021-44228"))
+    result = mcp_server.cve_to_cpe("CVE-2021-44228")
     assert result["category"] == "offline"
     assert result["retryable"] is False
 
@@ -186,7 +186,7 @@ def test_cve_to_cpe_offline_envelope(monkeypatch: Any) -> None:
 def test_cve_to_cpe_genuine_empty(monkeypatch: Any) -> None:
     monkeypatch.setattr(mcp_server._svc._cve, "get_cpes", lambda cve_id: [])
 
-    result = json.loads(mcp_server.cve_to_cpe("CVE-2021-44228"))
+    result = mcp_server.cve_to_cpe("CVE-2021-44228")
     assert result["total_count"] == 0
     assert "error" not in result
     assert "category" not in result
@@ -198,7 +198,7 @@ def test_cpe_to_cve_rate_limited_envelope(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(mcp_server._svc._cve, "cpe_to_cves", _raise)
 
-    result = json.loads(mcp_server.cpe_to_cve("cpe:2.3:a:apache:log4j:2.0"))
+    result = mcp_server.cpe_to_cve("cpe:2.3:a:apache:log4j:2.0")
     assert result["category"] == "rate_limited"
     assert result["retryable"] is True
     assert result["error_type"] == "RateLimitError"
@@ -208,7 +208,7 @@ def test_cpe_to_cve_rate_limited_envelope(monkeypatch: Any) -> None:
 def test_cpe_to_cve_genuine_empty(monkeypatch: Any) -> None:
     monkeypatch.setattr(mcp_server._svc._cve, "cpe_to_cves", lambda cpe: [])
 
-    result = json.loads(mcp_server.cpe_to_cve("cpe:2.3:a:apache:log4j:2.0"))
+    result = mcp_server.cpe_to_cve("cpe:2.3:a:apache:log4j:2.0")
     assert result["total_count"] == 0
     assert "error" not in result
 
@@ -219,7 +219,7 @@ def test_check_kev_status_rate_limited_envelope(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(mcp_server._svc._cve, "get_cve_info", _raise)
 
-    result = json.loads(mcp_server.check_kev_status("CVE-2021-44228"))
+    result = mcp_server.check_kev_status("CVE-2021-44228")
     assert result["category"] == "rate_limited"
     assert result["retryable"] is True
     # A throttle must NOT be reported as "not in KEV".
@@ -232,7 +232,7 @@ def test_check_kev_status_offline_envelope(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(mcp_server._svc._cve, "get_cve_info", _raise)
 
-    result = json.loads(mcp_server.check_kev_status("CVE-2021-44228"))
+    result = mcp_server.check_kev_status("CVE-2021-44228")
     assert result["category"] == "offline"
     assert "kev_status" not in result
 
@@ -243,7 +243,7 @@ def test_get_epss_score_offline_envelope(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(mcp_server._svc._cve, "get_cve_info", _raise)
 
-    result = json.loads(mcp_server.get_epss_score("CVE-2021-44228"))
+    result = mcp_server.get_epss_score("CVE-2021-44228")
     assert result["category"] == "offline"
     assert result["retryable"] is False
     # A cache miss must NOT be reported as "no EPSS data".

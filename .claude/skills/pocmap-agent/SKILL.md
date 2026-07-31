@@ -67,7 +67,7 @@ All are synchronous; all support `with ... as svc:` and a `close()` method.
 |---------|------------------------|
 | `CVEService` | `get_cve_info(cve_id)`, `get_cpes(cve_id)`, `get_description(cve_id)`, `cpe_to_cves(cpe)`, `validate_cve_id(cve_id)` (classmethod) |
 | `ExploitService` | `find_exploits(cve_id)`, `find_github_pocs(cve_id)`, `find_db_exploits(cve_id)`, `get_readme(repo_url)`, `filter_by_language(...)`, `sort_by_popularity(...)` |
-| `LabService` | `find_labs(cve_id)`, `search_vulhub(cve_id)`, `search_hackthebox(cve_id)`, `search_tryhackme(cve_id)` |
+| `LabService` | `find_labs(cve_id)`, `search_vulhub(cve_id)`, `search_hackthebox(cve_id)` |
 | `ReportService` | `generate_report(cve_id)`, `generate_bulk_report(cve_ids)`, `generate_bulk_report_from_file(path)`, `save_json_report(...)`, `save_html_report(...)` |
 | `BugBountyService` | `find_reports(cve_id)`, `search_hackerone(cve_id)`, `search_pentesterland(cve_id)`, `search_bugbounty_hunting(cve_id)` |
 | `RecentService` | `find_recent_cves(...)` |

@@ -246,11 +246,11 @@ is the nuclei invocation (`null` when the template path is unknown).
 {"cve_id": "CVE-2021-44228", "total_count": 2,
  "labs": [{"platform": "hackthebox", "name": "LogForge",
   "url": "https://app.hackthebox.com/machines/LogForge"},
-  {"platform": "tryhackme", "name": "Log4j2 RCE",
-  "url": "https://tryhackme.com/room/log4j2rce"}]}
+]}
 ```
-> **Note**: `platform` is a lowercase enum value — `hackthebox`, `tryhackme`, `vulhub`, or
-> `other` (not `HackTheBox`/`TryHackMe`). Match on the lowercase form. `setup_instructions`
+> **Note**: `platform` is a lowercase enum value — `vulhub`, `hackthebox` or `other`
+> (not `HackTheBox`). Match on the lowercase form. pocmap no longer queries TryHackMe;
+> its room index was never published, so every lookup returned a misleading "no room". `setup_instructions`
 > is *not* included here; use `find_vulhub_docker` for Docker setup steps.
 ### find_vulhub_docker
 **Purpose**: Find a Vulhub Docker environment for a CVE.

@@ -115,7 +115,7 @@ pocmap bulk - --format sarif --fail-on kev      # CI gate, IDs piped on stdin
 ```
 
 ## `pocmap labs <cve>`
-Search for CTF labs / vulnerable environments (Vulhub, HackTheBox, TryHackMe).
+Search for CTF labs / vulnerable environments (Vulhub, HackTheBox).
 
 ```bash
 pocmap labs CVE-2021-44228

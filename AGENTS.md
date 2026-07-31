@@ -4,7 +4,18 @@ This document is designed specifically for AI agents (Claude, GPT, Cursor, etc.)
 
 ## Overview
 
-PocMap provides 22 MCP tools, 3 resources, and 3 prompts for comprehensive vulnerability intelligence. All tools return JSON strings for reliable programmatic parsing.
+PocMap provides 22 MCP tools, 3 resources, and 3 prompts for comprehensive vulnerability intelligence.
+
+**Tools return structured content.** Each tool's result carries the payload as a real object
+in `structuredContent`, under an `{"type": "object"}` output schema, *and* as JSON text in
+`content[0].text`. Read whichever your client surfaces — they carry the same data, and the
+text block still parses with `json.loads`. (Before 2.6.0 the object was JSON-encoded twice
+inside `structuredContent: {"result": "<json string>"}`; that wrapper is gone.)
+
+**Every tool declares behavioural annotations**, so a host can tell a lookup from a write:
+21 are `readOnlyHint: true`, the three playbook tools are additionally `openWorldHint: false`
+(they read packaged data, no network), and only `verify_github_pocs` is not read-only —
+it downloads third-party exploit source to disk.
 
 **When to use this toolkit:**
 - User asks about a specific CVE ID
@@ -46,7 +57,7 @@ CVE IDs. It returns, for each CVE in one round trip:
 |---|---|
 | `cve_info` | description, CVSS, EPSS, KEV status, CWEs, references, `affected_products` |
 | `exploits` | every source at once — GitHub PoCs, Metasploit, ExploitDB, Nuclei |
-| `labs` | Vulhub / HackTheBox / TryHackMe environments |
+| `labs` | Vulhub / HackTheBox environments |
 | `bb_reports` | HackerOne / PentesterLand write-ups |
 
 That is the same information as `lookup_cve` + `find_github_pocs` +
@@ -151,7 +162,7 @@ Tell them to move it into their MCP client config's `env` block — the same pla
 
 | Tool | When to Use | Returns |
 |------|-------------|---------|
-| `find_practice_labs` | User wants hands-on practice environments | Labs with `platform` (hackthebox/tryhackme/vulhub), `name`, `url` |
+| `find_practice_labs` | User wants hands-on practice environments | Labs with `platform` (vulhub/hackthebox), `name`, `url` |
 | `find_vulhub_docker` | User wants the quickest local Docker setup | Docker URL + `setup_instructions` (clone, cd, docker compose up) |
 
 ### Discovery (3 tools)
@@ -273,7 +284,10 @@ are `null`; conversely `language`/`stars`/`forks` are `null` for every non-GitHu
 }
 ```
 
-`platform` is always lowercase (`hackthebox`, `tryhackme`, `vulhub`, `other`) — match on that
+`platform` is always lowercase (`vulhub`, `hackthebox`, `other`) — match on that.
+The `tryhackme` value still exists in the enum for third-party lab plugins, but pocmap
+itself no longer queries TryHackMe: the room index it read was never published, so every
+lookup returned "no room", which is indistinguishable from a real answer
 form. `find_practice_labs` returns only `{platform, name, url}`; `setup_instructions` is a
 Python-model field, so use `find_vulhub_docker` for Docker setup steps over MCP.
 
@@ -308,7 +322,7 @@ Agent steps:
 
    entries[0].cve_info   -> CVSS 10.0 CRITICAL, EPSS 0.9999, KEV=true, CWEs, references
    entries[0].exploits   -> GitHub PoCs (stars/language) + Metasploit + ExploitDB + Nuclei
-   entries[0].labs       -> Vulhub / HackTheBox / TryHackMe environments
+   entries[0].labs       -> Vulhub / HackTheBox environments
    entries[0].bb_reports -> HackerOne / PentesterLand write-ups
 
 Response synthesis:

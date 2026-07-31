@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-07-31
+
+### Changed
+- **MCP tools now return structured content.** All 22 tools returned a JSON
+  *string*, so the SDK derived `outputSchema: {"result": {"type": "string"}}` and sent
+  `structuredContent: {"result": "<json string>"}` — the payload JSON-encoded twice, behind
+  a schema that described none of it. Tools now return objects, so a client gets the real
+  object under an `{"type": "object"}` schema. **`content[0].text` is unchanged and still
+  parses as JSON**, so a client reading the text block is unaffected.
+
+  The schema is deliberately permissive rather than one model per tool. A tool returns
+  either its success shape *or* an error envelope, and a pydantic model materializes its
+  declared fields with defaults — a per-tool model would stamp `total_count: 0` onto a
+  throttled lookup and turn "could not answer" into "no results", which is the exact
+  false negative `tests/test_mcp_hardening.py` exists to prevent. `pocmap.models` exports 13
+  JSON Schemas for the nested payloads and `AGENTS.md` documents each tool's keys.
+
+  *Python API callers:* `pocmap.mcp_server` tool functions now return `dict[str, Any]`
+  instead of `str`. Drop the `json.loads(...)` if you call them directly.
+
+### Removed
+- **TryHackMe lab discovery.** It read a room index that was never published, so every
+  lookup returned "no room" — indistinguishable from a genuine answer, which is the wrong
+  failure mode for a security tool. `LabPlatform.TRYHACKME` remains a valid enum value so
+  third-party lab plugins can still emit it; pocmap simply no longer queries TryHackMe.
+  Vulhub and HackTheBox are unaffected.
+
+
 ## [2.5.0] - 2026-07-31
 
 Adds the dependency axis. Everything before this release was keyed on a CPE *product* —

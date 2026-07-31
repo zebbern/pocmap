@@ -300,7 +300,7 @@ def test_mcp_tool_returns_the_documented_shape(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         PackageService, "discover_package", lambda self, **kw: _result(_vuln())
     )
-    data = json.loads(discover_package_cves("Maven", "org.apache.logging.log4j:log4j-core"))
+    data = discover_package_cves("Maven", "org.apache.logging.log4j:log4j-core")
     assert data["ecosystem"] == "Maven"
     vuln = data["vulnerabilities"][0]
     for key in ("id", "cve_ids", "severity", "cvss_score", "epss_score", "kev_status",
@@ -320,7 +320,7 @@ def test_mcp_tool_reports_a_rejected_query_as_invalid_input(
         raise ValidationError("OSV rejected ecosystem 'nope'.")
 
     monkeypatch.setattr(PackageService, "discover_package", _boom)
-    data = json.loads(discover_package_cves("nope", "django"))
+    data = discover_package_cves("nope", "django")
     assert data["category"] == "invalid_input"
     assert data["retryable"] is False
     # The success key must be ABSENT so an agent cannot read a failure as empty.

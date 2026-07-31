@@ -5,7 +5,7 @@ This server provides AI agents with tools to:
 - Look up CVE details from NVD, CVE.org, EPSS, and CISA KEV sources
 - Find exploits and PoCs from GitHub, Metasploit, ExploitDB, and Nuclei
 - Discover bug bounty reports from HackerOne, PentesterLand
-- Find CTF labs on Vulhub, HackTheBox, TryHackMe
+- Find CTF labs on Vulhub and HackTheBox
 - Convert between CVEs and CPEs
 - Generate structured vulnerability reports
 
@@ -999,7 +999,7 @@ mcp = MCPServer(
         "You can look up CVE details from NVD, CVE.org, CISA KEV, and EPSS sources; "
         "find exploits and PoCs from GitHub, Metasploit, ExploitDB, and Nuclei; "
         "discover bug bounty reports from HackerOne and PentesterLand; "
-        "find practice labs on Vulhub, HackTheBox, and TryHackMe; "
+        "find practice labs on Vulhub and HackTheBox; "
         "convert between CVEs and CPEs; and generate vulnerability reports. "
         "Always verify CVE IDs are in the correct format (CVE-YYYY-NNNN+) before querying. "
         "When a user asks about a vulnerability, provide comprehensive context including "
@@ -1055,26 +1055,25 @@ def _tool(
 ) -> Any:
     """Register a tool with pocmap's house defaults.
 
-    ``structured_output=False`` is deliberate. Every tool is annotated ``-> str``
-    and returns a JSON *string*, so the SDK would otherwise derive the schema
-    from that annotation and advertise ``{"result": {"type": "string"}}`` on all
-    22 tools while wrapping the payload as ``structuredContent: {"result":
-    "<json string>"}`` — the content JSON-encoded twice, behind a schema that
-    describes none of it. That is worse than declaring no schema: a client that
-    validates against it learns nothing, and one that trusts it gets a string
-    where the tool documents an object. Callers read ``content[0].text`` and
-    parse it, which is unchanged.
+    Structured output is left on. Every tool returns ``dict[str, Any]``, so the
+    SDK emits the object itself as ``structuredContent`` under an
+    ``{"type": "object"}`` schema. Tools previously returned a JSON *string*,
+    which made the SDK derive ``{"result": {"type": "string"}}`` and wrap the
+    payload as ``structuredContent: {"result": "<json string>"}`` — encoded
+    twice, behind a schema describing none of it.
 
-    Returning real objects with per-tool schemas (pocmap already exports 13
-    pydantic JSON Schemas that describe exactly these payloads) is the better
-    end state and is tracked separately — it changes the return type of all 22
-    tools and is not a drive-by edit.
+    The schema is deliberately permissive rather than per-tool. A tool returns
+    either its success shape *or* an error envelope, and pydantic materializes
+    declared fields with defaults — so a per-tool model would stamp
+    ``total_count: 0`` onto a throttled lookup, turning "could not answer" into
+    "no results". :mod:`pocmap.models` exports 13 JSON Schemas describing the
+    nested payloads for callers who want them, and ``AGENTS.md`` documents each
+    tool's keys; neither costs the error envelope its honesty.
     """
     return mcp.tool(
         name=name,
         description=description,
         annotations=annotations,
-        structured_output=False,
     )
 
 
@@ -1117,26 +1116,31 @@ def _format_cve_text(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _format_error_json(e: Exception, context: str = "") -> str:
-    """Format an exception as a structured JSON error response.
+def _format_error_json(e: Exception, context: str = "") -> dict[str, Any]:
+    """Format an exception as a structured error object.
 
     Categorizes the error for programmatic handling by AI agents.
     Returns generic error messages without raw exception details.
+
+    Deliberately carries ONLY error keys. A failure must never present a
+    success key such as ``total_count`` or ``kev_status``, because an agent
+    reading ``total_count: 0`` off a throttled lookup would report "no results"
+    for a question that was never answered.
     """
     error_type = type(e).__name__
     category, retryable = categorize_exception(e)
 
-    return json.dumps({
+    return {
         "error": f"An error occurred ({error_type})",
         "error_type": error_type,
         "category": category,
         "retryable": retryable,
         "context": context,
-    })
+    }
 
 
-def _tool_error(e: Exception, context: str) -> str:
-    """Log a tool failure and return the structured JSON error response.
+def _tool_error(e: Exception, context: str) -> dict[str, Any]:
+    """Log a tool failure and return the structured error object.
 
     Consolidates the ``logger.error(...); return _format_error_json(...)`` tail
     every ``@mcp.tool`` ``except`` block repeated; *context* is passed straight
@@ -1146,13 +1150,16 @@ def _tool_error(e: Exception, context: str) -> str:
     return _format_error_json(e, context)
 
 
-def _ok(data: Any) -> str:
-    """Serialize a successful tool result (``json.dumps(..., indent=2, default=str)``).
+def _ok(data: Any) -> dict[str, Any]:
+    """Normalize a successful tool result into a JSON-safe object.
 
-    Single home for the serialization contract shared by the CVE/exploit/report
-    tools; output is identical to the inline calls it replaces.
+    Tools return an object rather than a JSON *string* so the SDK can emit real
+    ``structuredContent``. The round-trip through ``json.dumps(default=str)``
+    keeps the previous coercion contract exactly — datetimes and enums still
+    become strings — while handing back a dict instead of text.
     """
-    return json.dumps(data, indent=2, default=str)
+    coerced = json.loads(json.dumps(data, indent=2, default=str))
+    return coerced if isinstance(coerced, dict) else {"result": coerced}
 
 
 # ---------------------------------------------------------------------------
@@ -1170,7 +1177,7 @@ def _ok(data: Any) -> str:
         "Data sources: NVD, CVE.org, CISA KEV catalog, EPSS."
     ),
 )
-def lookup_cve(cve_id: str) -> str:
+def lookup_cve(cve_id: str) -> dict[str, Any]:
     """Look up detailed CVE information.
 
     Args:
@@ -1185,7 +1192,7 @@ def lookup_cve(cve_id: str) -> str:
     try:
         data = _svc.lookup_cve(cve_id)
         if "error" in data:
-            return json.dumps({
+            return _ok({
                 "error": data["error"],
                 "error_type": data.get("error_type", "unknown"),
                 "category": data.get("category", "unknown"),
@@ -1209,7 +1216,7 @@ def lookup_cve(cve_id: str) -> str:
         "be patched urgently. EPSS complements CVSS by adding threat intelligence context."
     ),
 )
-def get_epss_score(cve_id: str) -> str:
+def get_epss_score(cve_id: str) -> dict[str, Any]:
     """Get the EPSS probability score for a CVE.
 
     Args:
@@ -1224,7 +1231,7 @@ def get_epss_score(cve_id: str) -> str:
         cve_clean = cve_id.upper().strip()
         if score is not None:
             risk = "CRITICAL" if score > 0.9 else "HIGH" if score > 0.5 else "MEDIUM" if score > 0.2 else "LOW"
-            return json.dumps({
+            return _ok({
                 "cve_id": cve_clean,
                 "epss_score": score,
                 "risk_level": risk,
@@ -1236,7 +1243,7 @@ def get_epss_score(cve_id: str) -> str:
                     "EPSS <= 0.2: lower priority."
                 ),
             })
-        return json.dumps({
+        return _ok({
             "cve_id": cve_clean,
             "epss_score": None,
             "risk_level": "UNKNOWN",
@@ -1257,7 +1264,7 @@ def get_epss_score(cve_id: str) -> str:
         "should be prioritized for immediate remediation regardless of CVSS score."
     ),
 )
-def check_kev_status(cve_id: str) -> str:
+def check_kev_status(cve_id: str) -> dict[str, Any]:
     """Check if a CVE is in the CISA KEV catalog.
 
     Args:
@@ -1270,7 +1277,7 @@ def check_kev_status(cve_id: str) -> str:
     try:
         is_kev = _svc.check_kev(cve_id)
         cve_clean = cve_id.upper().strip()
-        return json.dumps({
+        return _ok({
             "cve_id": cve_clean,
             "kev_status": is_kev,
             "in_kev_catalog": is_kev,
@@ -1303,7 +1310,7 @@ def check_kev_status(cve_id: str) -> str:
         "is exploited, or find detection/remediation scripts on GitHub. Results are sorted by stars."
     ),
 )
-def find_github_pocs(cve_id: str, limit: int = 10) -> str:
+def find_github_pocs(cve_id: str, limit: int = 10) -> dict[str, Any]:
     """Find GitHub PoC repositories for a CVE.
 
     Args:
@@ -1349,7 +1356,7 @@ def find_github_pocs(cve_id: str, limit: int = 10) -> str:
         "that inference was measured against this data and produced unrelated results."
     ),
 )
-def get_attack_techniques(cve_id: str) -> str:
+def get_attack_techniques(cve_id: str) -> dict[str, Any]:
     """Get curated MITRE ATT&CK techniques for a CVE.
 
     Args:
@@ -1395,7 +1402,7 @@ def get_attack_techniques(cve_id: str) -> str:
         "saying so — report that to the user rather than retrying."
     ),
 )
-def verify_github_pocs(cve_id: str, limit: int = 5) -> str:
+def verify_github_pocs(cve_id: str, limit: int = 5) -> dict[str, Any]:
     """Fetch and score the source of a CVE's top GitHub PoCs.
 
     Args:
@@ -1425,7 +1432,7 @@ def verify_github_pocs(cve_id: str, limit: int = 5) -> str:
         # would tell the agent only "unknown error", leaving it unable to say
         # what the user must do.
         logger.info("verify_github_pocs called without the opt-in flag")
-        return json.dumps({
+        return _ok({
             "error": str(e),
             "error_type": "PoCSourceDisabledError",
             "category": "not_enabled",
@@ -1454,7 +1461,7 @@ def verify_github_pocs(cve_id: str, limit: int = 5) -> str:
         "planning penetration tests. The existence of a Metasploit module indicates mature exploit code."
     ),
 )
-def find_metasploit_module(cve_id: str, limit: int = 1) -> str:
+def find_metasploit_module(cve_id: str, limit: int = 1) -> dict[str, Any]:
     """Find a Metasploit module for a CVE.
 
     Args:
@@ -1495,7 +1502,7 @@ def find_metasploit_module(cve_id: str, limit: int = 1) -> str:
         "of frameworks like Metasploit. ExploitDB entries are often the first exploits published."
     ),
 )
-def find_exploitdb_entry(cve_id: str, limit: int = 1) -> str:
+def find_exploitdb_entry(cve_id: str, limit: int = 1) -> dict[str, Any]:
     """Find an ExploitDB entry for a CVE.
 
     Args:
@@ -1537,7 +1544,7 @@ def find_exploitdb_entry(cve_id: str, limit: int = 1) -> str:
         "in your environment. Nuclei templates provide standardized, reliable detection."
     ),
 )
-def find_nuclei_template(cve_id: str, limit: int = 1) -> str:
+def find_nuclei_template(cve_id: str, limit: int = 1) -> dict[str, Any]:
     """Find a Nuclei template for a CVE.
 
     Args:
@@ -1583,7 +1590,7 @@ def find_nuclei_template(cve_id: str, limit: int = 1) -> str:
         "scenarios, learn from security researchers' methodologies, or find detailed technical write-ups."
     ),
 )
-def find_bug_bounty_reports(cve_id: str) -> str:
+def find_bug_bounty_reports(cve_id: str) -> dict[str, Any]:
     """Find bug bounty reports for a CVE.
 
     Args:
@@ -1614,13 +1621,13 @@ def find_bug_bounty_reports(cve_id: str) -> str:
     description=(
         "Find CTF (Capture The Flag) labs, vulnerable machines, and practice environments "
         "for a CVE. These labs provide safe, legal environments to practice exploiting the vulnerability. "
-        "Returns labs from platforms like Vulhub (Docker-based), TryHackMe, and HackTheBox. "
+        "Returns labs from Vulhub (Docker-based) and HackTheBox. "
         "Each lab includes the platform name, challenge name, URL, and setup instructions. "
         "Use this tool when you want hands-on practice with a vulnerability, need to demonstrate "
         "exploitation safely, or want to build detection rules in a controlled environment."
     ),
 )
-def find_practice_labs(cve_id: str) -> str:
+def find_practice_labs(cve_id: str) -> dict[str, Any]:
     """Find CTF labs and practice environments for a CVE.
 
     Args:
@@ -1653,7 +1660,7 @@ def find_practice_labs(cve_id: str) -> str:
         "for a vulnerability. Docker environments are isolated, reproducible, and easy to clean up."
     ),
 )
-def find_vulhub_docker(cve_id: str) -> str:
+def find_vulhub_docker(cve_id: str) -> dict[str, Any]:
     """Find a Vulhub Docker environment for a CVE.
 
     Args:
@@ -1669,7 +1676,7 @@ def find_vulhub_docker(cve_id: str) -> str:
         if url:
             parts = url.rstrip("/").split("/")
             path_suffix = "/".join(parts[-2:]) if len(parts) >= 2 else ""
-            return json.dumps({
+            return _ok({
                 "cve_id": cve_clean,
                 "found": True,
                 "url": url,
@@ -1680,7 +1687,7 @@ def find_vulhub_docker(cve_id: str) -> str:
                     "stop": "docker compose down",
                 },
             })
-        return json.dumps({
+        return _ok({
             "cve_id": cve_clean,
             "found": False,
             "url": None,
@@ -1706,7 +1713,7 @@ def find_vulhub_docker(cve_id: str) -> str:
         "environment to determine exposure."
     ),
 )
-def cve_to_cpe(cve_id: str) -> str:
+def cve_to_cpe(cve_id: str) -> dict[str, Any]:
     """Convert a CVE to its associated CPEs.
 
     Args:
@@ -1740,7 +1747,7 @@ def cve_to_cpe(cve_id: str) -> str:
         "vulnerability management."
     ),
 )
-def cpe_to_cve(cpe: str) -> str:
+def cpe_to_cve(cpe: str) -> dict[str, Any]:
     """Convert a CPE to its associated CVEs.
 
     Args:
@@ -1782,7 +1789,7 @@ def discover_product_cves(
     version: str = "",
     vendor: str = "",
     limit: int = 50,
-) -> str:
+) -> dict[str, Any]:
     """Discover CVEs affecting a product by name and version.
 
     Args:
@@ -1807,7 +1814,7 @@ def discover_product_cves(
             limit=limit,
         )
         if "error" in result:
-            return json.dumps({
+            return _ok({
                 "error": result["error"],
                 "error_type": result.get("error_type", "unknown"),
                 "category": result.get("category", "unknown"),
@@ -1847,7 +1854,7 @@ def discover_package_cves(
     name: str,
     version: str = "",
     limit: int = 50,
-) -> str:
+) -> dict[str, Any]:
     """Find vulnerabilities affecting a package and the releases that fix them.
 
     Args:
@@ -1879,7 +1886,7 @@ def discover_package_cves(
             limit=limit,
         )
         if "error" in result:
-            return json.dumps({
+            return _ok({
                 "error": result["error"],
                 "error_type": result.get("error_type", "unknown"),
                 "category": result.get("category", "unknown"),
@@ -1913,7 +1920,7 @@ def discover_package_cves(
         "specific source. Also suitable for automation, CI/CD, and dashboards."
     ),
 )
-def generate_json_report(cve_ids: str) -> str:
+def generate_json_report(cve_ids: str) -> dict[str, Any]:
     """Generate a JSON report for one or more CVEs.
 
     Args:
@@ -1932,7 +1939,7 @@ def generate_json_report(cve_ids: str) -> str:
     try:
         ids = [c.strip().upper() for c in cve_ids.split(",") if c.strip()]
         if not ids:
-            return json.dumps({
+            return _ok({
                 "error": "No valid CVE IDs provided.",
                 "category": "invalid_input",
                 "hint": "Provide one or more comma-separated CVE IDs, e.g. 'CVE-2021-44228,CVE-2023-44487'",
@@ -1953,7 +1960,7 @@ def generate_json_report(cve_ids: str) -> str:
         "or documentation. The HTML report can be saved to a file and opened in any browser."
     ),
 )
-def generate_html_report(cve_ids: str) -> str:
+def generate_html_report(cve_ids: str) -> dict[str, Any]:
     """Generate an HTML report for one or more CVEs.
 
     Args:
@@ -1971,7 +1978,7 @@ def generate_html_report(cve_ids: str) -> str:
     try:
         ids = [c.strip().upper() for c in cve_ids.split(",") if c.strip()]
         if not ids:
-            return json.dumps({
+            return _ok({
                 "error": "No valid CVE IDs provided.",
                 "category": "invalid_input",
                 "hint": "Provide one or more comma-separated CVE IDs, e.g. 'CVE-2021-44228,CVE-2023-44487'",
@@ -2009,7 +2016,7 @@ def find_recent_exploits(
     severity: str = "",
     sort: str = "cve_date",
     limit: int = 50,
-) -> str:
+) -> dict[str, Any]:
     """Find recently published CVEs with exploit/PoC intelligence.
 
     Args:
@@ -2069,30 +2076,30 @@ def find_recent_exploits(
 _PLAYBOOKS_DIR = Path(__file__).resolve().parent / "bugbounty" / "playbooks"
 
 
-def _load_playbook(filename: str) -> str:
-    """Load a playbook JSON file and return its contents as a JSON string.
+def _load_playbook(filename: str) -> dict[str, Any]:
+    """Load a playbook JSON file and return its contents as an object.
 
-    Falls back to an error JSON if the file is missing or unreadable.
+    Falls back to an error object if the file is missing or unreadable.
     """
     if ".." in filename or os.path.sep in filename:
-        return json.dumps({"error": "Invalid filename"})
+        return {"error": "Invalid filename"}
     path = _PLAYBOOKS_DIR / filename
     try:
         if not path.exists():
-            return json.dumps({
+            return {
                 "error": f"Playbook file not found: {filename}",
                 "category": "not_found",
-            })
+            }
         with open(path, encoding="utf-8") as f:
-            content = json.load(f)
-        return json.dumps(content, indent=2)
+            content: dict[str, Any] = json.load(f)
+        return content
     except json.JSONDecodeError:
-        return json.dumps({
+        return {
             "error": f"Invalid JSON in playbook {filename}",
             "category": "invalid_input",
-        })
+        }
     except Exception as e:
-        return json.dumps({"error": f"Failed to load playbook ({type(e).__name__})"})
+        return {"error": f"Failed to load playbook ({type(e).__name__})"}
 
 
 @_tool(
@@ -2106,7 +2113,7 @@ def _load_playbook(filename: str) -> str:
         "Use this tool when starting a comprehensive vulnerability assessment workflow."
     ),
 )
-def get_cve_assessment_playbook() -> str:
+def get_cve_assessment_playbook() -> dict[str, Any]:
     """Get the complete CVE assessment playbook with detailed step-by-step workflow.
 
     Returns:
@@ -2127,7 +2134,7 @@ def get_cve_assessment_playbook() -> str:
         "Use this tool when dealing with an actively exploited or high-impact vulnerability."
     ),
 )
-def get_rapid_response_playbook() -> str:
+def get_rapid_response_playbook() -> dict[str, Any]:
     """Get the rapid response playbook for emergency critical CVE handling.
 
     Returns:
@@ -2148,7 +2155,7 @@ def get_rapid_response_playbook() -> str:
         "Use this tool when preparing a bug bounty report or learning the submission process."
     ),
 )
-def get_bug_bounty_playbook() -> str:
+def get_bug_bounty_playbook() -> dict[str, Any]:
     """Get the bug bounty submission playbook from finding to report submission.
 
     Returns:

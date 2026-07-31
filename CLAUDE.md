@@ -44,6 +44,9 @@ Defaulting to internal knowledge often leads to outdated implementations. For ex
   `models.py`, `services/`, `clients/`, `bugbounty/`, `utils/`, `data/`, `templates/`, `mcp_server.py`.
   Installed as editable `pocmap`. (The old repo-root shadow `models.py`/`services.py`/`__init__.py` mock
   modules were **removed**; there is no silent mock fallback.)
+- **MCP tools return `dict[str, Any]`**, not a JSON string — the SDK turns that into real
+  `structuredContent`. Resources and prompts still return `str`. Register tools through the
+  local `_tool()` helper, which applies the house `ToolAnnotations` defaults.
 - **MCP server implementation** is `src/pocmap/mcp_server.py` (22 tools, 3 resources, 3 prompts), exposed as
   the `pocmap-mcp` console script. Repo-root `mcp_server.py` is a thin launcher shim; `mcp_transport_stdio.py`
   / `mcp_transport_sse.py` remain at the repo root for alternate transports.

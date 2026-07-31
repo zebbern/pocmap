@@ -1,7 +1,11 @@
 """CTF lab and vulnerable environment discovery service.
 
 Searches for pre-built Docker environments (Vulhub) and CTF platforms
-(HackTheBox, TryHackMe) related to CVE identifiers.
+(HackTheBox) related to CVE identifiers.
+
+TryHackMe was removed in 2.5.0: it depended on a room index that was never
+published, so every lookup returned "no room" — indistinguishable from a real
+answer. A source that cannot answer is worse than no source in a security tool.
 
 Example::
 
@@ -21,7 +25,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
-from pocmap.config import HTB_TAGS_URL, THM_ROOMS_URL, VULHUB_TOML_URL, settings
+from pocmap.config import HTB_TAGS_URL, VULHUB_TOML_URL, settings
 from pocmap.models import LabEnvironment, LabPlatform
 from pocmap.utils.http import HTTPClient, OfflineError, fetch_text, is_programming_error
 from pocmap.utils.registry import PluginRegistry
@@ -37,8 +41,7 @@ _HTB_MACHINE_RE = re.compile(r"^HTB:\s+(\S+)")
 class LabService:
     """Service for discovering CTF labs and vulnerable environments.
 
-    Searches Vulhub (Docker), HackTheBox, and TryHackMe for labs
-    related to a CVE identifier.
+    Searches Vulhub (Docker) and HackTheBox for labs related to a CVE.
 
     Example::
 
@@ -48,7 +51,6 @@ class LabService:
         # Search specific platforms
         vulhub = service.search_vulhub("CVE-2021-44228")
         htb = service.search_hackthebox("CVE-2021-44228")
-        thm = service.search_tryhackme("CVE-2021-44228")
     """
 
     def __init__(self, http_client: HTTPClient | None = None) -> None:
@@ -180,53 +182,6 @@ class LabService:
 
         return None
 
-    def search_tryhackme(self, cve_id: str) -> LabEnvironment | None:
-        """Search TryHackMe for rooms related to a CVE.
-
-        Args:
-            cve_id: The CVE identifier.
-
-        Returns:
-            A :class:`LabEnvironment`, or *None* if not found.
-        """
-        return self._search_tryhackme(cve_id)
-
-    def _search_tryhackme(self, cve_id: str) -> LabEnvironment | None:
-        """Internal: search TryHackMe for rooms related to a CVE.
-
-        Note the index this reads (``THM_ROOMS_URL``) is not currently published,
-        so this returns ``None`` for every CVE. The miss is logged rather than
-        swallowed: a source that is *absent* and a CVE that genuinely has no room
-        are different answers, and only one of them is about the CVE.
-        """
-        try:
-            text = fetch_text(THM_ROOMS_URL, headers=settings.default_headers)
-            if not text:
-                logger.warning(
-                    "TryHackMe room index unavailable (%s); reporting no room for %s "
-                    "— this is a missing source, not an absence of rooms",
-                    THM_ROOMS_URL,
-                    cve_id,
-                )
-                return None
-
-            for line in text.splitlines():
-                if ":" in line:
-                    cve_part, url_part = line.split(":", 1)
-                    if cve_part.strip().upper() == cve_id.upper():
-                        room_name = url_part.strip().split("/")[-1]
-                        return LabEnvironment(
-                            platform=LabPlatform.TRYHACKME,
-                            name=room_name,
-                            url=url_part.strip(),
-                        )
-        except Exception as exc:
-            if is_programming_error(exc) or isinstance(exc, OfflineError):
-                raise
-            logger.debug("TryHackMe search failed for %s: %s", cve_id, exc)
-
-        return None
-
     def close(self) -> None:
         """Release the underlying HTTP client."""
         self._client.close()
@@ -249,7 +204,6 @@ def _register_default_platforms() -> None:
     """Register default lab platform providers at module import time."""
     _lab_platform_registry.register("vulhub", LabService._search_vulhub)
     _lab_platform_registry.register("hackthebox", LabService._search_hackthebox)
-    _lab_platform_registry.register("tryhackme", LabService._search_tryhackme)
 
 
 _register_default_platforms()
