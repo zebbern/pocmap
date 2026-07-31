@@ -1,6 +1,6 @@
 # PocMap
 
-[![Version](https://img.shields.io/badge/version-2.6.2-blue.svg)](https://github.com/zebbern/pocmap)
+[![Version](https://img.shields.io/badge/version-2.6.3-blue.svg)](https://github.com/zebbern/pocmap)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2-purple.svg)](https://docs.pydantic.dev/)
@@ -689,7 +689,10 @@ These values are a public contract: existing codes are never renumbered.
 
 ## Caching & Offline Mode
 
-PocMap keeps a **persistent, TTL'd HTTP response cache** on disk (default `./.cache`).
+PocMap keeps a **persistent, TTL'd HTTP response cache** on disk. The default is the
+platform user cache directory (`%LOCALAPPDATA%\pocmap\Cache` on Windows,
+`$XDG_CACHE_HOME/pocmap` or `~/.cache/pocmap` elsewhere); a source checkout uses
+`<repo>/.cache` so development is self-contained. Override with `POCMAP_CACHE_DIR`.
 This turns network-bound calls into sub-second cached ones, dodges GitHub/NVD rate
 limits, and backs a real offline mode. Non-200 and error responses are never cached.
 
@@ -715,7 +718,7 @@ unaffected: they still honour the TTL and refetch expired entries.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `POCMAP_CACHE_ENABLED` | `true` | Enable/disable the persistent HTTP cache. |
-| `POCMAP_CACHE_DIR` | `./.cache` | Directory for cached responses. |
+| `POCMAP_CACHE_DIR` | platform user cache | Directory for cached responses. `%LOCALAPPDATA%\pocmap\Cache` on Windows, `$XDG_CACHE_HOME/pocmap` (or `~/.cache/pocmap`) elsewhere; a source checkout uses `<repo>/.cache`. |
 | `POCMAP_CACHE_TTL` | `3600` | Seconds a cached entry stays fresh. |
 | `POCMAP_CACHE_MAX_MB` | `200` | On-disk cache cap (MB) before LRU eviction. |
 | `POCMAP_OFFLINE` | `false` | Serve only from cache; a miss errors instead of hitting the network. |
@@ -1124,7 +1127,8 @@ File operations use `safe_path()` which normalizes paths and validates they stay
 
 ## Configuration
 
-Configuration is loaded from environment variables (prefixed with `POCMAP_`) and optional `.env` file:
+Configuration is loaded from environment variables (prefixed with `POCMAP_`) and an optional
+`.env` file, discovered from the current directory upward:
 
 ```bash
 # Create .env file
@@ -1152,7 +1156,7 @@ EOF
 | `POCMAP_THREAD_POOL_SIZE` | 10 | Worker thread count for bulk operations |
 | `POCMAP_LOG_LEVEL` | INFO | Logging verbosity (DEBUG, INFO, WARNING, ERROR) |
 | `POCMAP_CACHE_ENABLED` | true | Enable the persistent HTTP response cache |
-| `POCMAP_CACHE_DIR` | ./.cache | Directory for cached responses |
+| `POCMAP_CACHE_DIR` | platform user cache | Directory for cached responses (see Caching & Offline Mode) |
 | `POCMAP_CACHE_TTL` | 3600 | Seconds a cached entry stays fresh |
 | `POCMAP_CACHE_MAX_MB` | 200 | On-disk cache cap (MB) before LRU eviction |
 | `POCMAP_OFFLINE` | false | Serve HTTP only from cache; a miss errors instead of hitting the network |

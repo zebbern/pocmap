@@ -26,6 +26,27 @@ from typing import Final
 PACKAGE_ROOT: Final[Path] = Path(__file__).resolve().parent
 PROJECT_ROOT: Final[Path] = PACKAGE_ROOT.parent.parent
 
+def _default_cache_dir() -> Path:
+    """Platform-appropriate user cache directory.
+
+    NOT ``PROJECT_ROOT / ".cache"``. PROJECT_ROOT is derived from the package
+    location, so for a pip install that resolved to ``<venv>/Lib/.cache`` — and
+    under ``uvx`` (the install README recommends for the MCP server) the
+    environment is ephemeral, so the cache was created and thrown away on every
+    single run. The persistent-cache feature silently did nothing for the
+    primary documented install path.
+
+    A source checkout keeps ``<repo>/.cache`` so development is unchanged.
+    """
+    if (PROJECT_ROOT / "pyproject.toml").is_file():
+        return PROJECT_ROOT / ".cache"
+    if os.name == "nt":
+        base = os.getenv("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "pocmap" / "Cache"
+    xdg = os.getenv("XDG_CACHE_HOME")
+    return (Path(xdg) if xdg else Path.home() / ".cache") / "pocmap"
+
+
 DEFAULT_HTTP_TIMEOUT: Final[int] = 30
 DEFAULT_MAX_RETRIES: Final[int] = 3
 DEFAULT_BACKOFF_FACTOR: Final[float] = 1.5
@@ -85,8 +106,12 @@ ATTACK_KEV_CONTENTS_API: Final[str] = (
     "https://api.github.com/repos/center-for-threat-informed-defense"
     "/mappings-explorer/contents/mappings/kev"
 )
+# NOTE the trailing "/cves": records live under cvelistV5/cves/<year>/<batch>/.
+# Without it every record URL 404s, get_cve_record() silently falls back to the
+# CVE AWG API, and vendor/product/CWE/publication_date come back empty for every
+# CVE in the catalogue. Verify with a real fetch before changing this.
 CVE_ORG_GIT_RAW: Final[str] = (
-    "https://raw.githubusercontent.com/CVEProject/cvelistV5/refs/heads/main"
+    "https://raw.githubusercontent.com/CVEProject/cvelistV5/refs/heads/main/cves"
 )
 CISA_KEV_URL: Final[str] = (
     "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
@@ -188,7 +213,7 @@ class Settings:
     backoff_factor: float = DEFAULT_BACKOFF_FACTOR
     thread_pool_size: int = DEFAULT_THREAD_POOL_SIZE
     user_agents_file: Path = USER_AGENTS_FILE
-    cache_dir: Path = field(default_factory=lambda: PROJECT_ROOT / ".cache")
+    cache_dir: Path = field(default_factory=_default_cache_dir)
     cache_enabled: bool = True
     cache_ttl: int = DEFAULT_CACHE_TTL
     cache_max_mb: int = DEFAULT_CACHE_MAX_MB
@@ -253,11 +278,22 @@ def _load_env_file(env_path: Path) -> None:
 
 def _build_settings() -> Settings:
     """Construct a :class:`Settings` instance from all configuration sources."""
-    # Attempt to load python-dotenv if available
+    # Load .env from the CWD upward FIRST, then the install root.
+    #
+    # PROJECT_ROOT is derived from the package location, so for a pip install it
+    # is <venv>/Lib — a path no user ever puts a .env in. Loading only from there
+    # meant the .env workflow README documents did nothing for anyone who did not
+    # install from a source checkout. CWD-first matches every other tool and is
+    # what "create a .env in your project" actually means.
     try:
-        from dotenv import load_dotenv
-        load_dotenv(PROJECT_ROOT / ".env")
+        from dotenv import find_dotenv, load_dotenv
+
+        found = find_dotenv(usecwd=True)
+        if found:
+            load_dotenv(found)
+        load_dotenv(PROJECT_ROOT / ".env")  # source checkouts, without overriding
     except ImportError:
+        _load_env_file(Path.cwd() / ".env")
         _load_env_file(PROJECT_ROOT / ".env")
 
     prefix = "POCMAP_"
@@ -310,7 +346,7 @@ def _build_settings() -> Settings:
         user_agents_file=Path(
             os.getenv(f"{prefix}USER_AGENTS_FILE", str(USER_AGENTS_FILE))
         ),
-        cache_dir=_safe_dir(f"{prefix}CACHE_DIR", PROJECT_ROOT / ".cache"),
+        cache_dir=_safe_dir(f"{prefix}CACHE_DIR", _default_cache_dir()),
         cache_enabled=_safe_bool(f"{prefix}CACHE_ENABLED", True),
         cache_ttl=_safe_int(f"{prefix}CACHE_TTL", DEFAULT_CACHE_TTL),
         cache_max_mb=_safe_int(f"{prefix}CACHE_MAX_MB", DEFAULT_CACHE_MAX_MB),

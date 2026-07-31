@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.3] - 2026-07-31
+
+Found by using the published package the way a new user would, from a clean install.
+
+### Fixed
+
+- **Every CVE.org record lookup was 404ing.** `CVE_ORG_GIT_RAW` was missing the `/cves` path
+  segment (records live at `cvelistV5/cves/<year>/<batch>/`), so `get_cve_record()` silently
+  fell through to the CVE AWG API fallback and `vendor`, `product`, `cwes` and
+  `publication_date` came back **empty for every CVE in the catalogue** — in `pocmap lookup`,
+  the `lookup_cve` MCP tool, and `generate_json_report`. README's own documented example
+  output (`info.cwes -> ["CWE-77", "CWE-94"]`, `info.vendor -> "Apache"`) had not been
+  reproducible. CVE-2021-44228 now returns `Apache Software Foundation / Apache Log4j2`,
+  `['CWE-502', 'CWE-400', 'CWE-20']`, `10 Dec 2021`.
+
+  It survived because every test mocks the HTTP layer, so a completely dead URL kept 895
+  tests green. New `tests/test_upstream_urls.py` (`network`-marked) fetches the real URLs and
+  asserts the payloads still contain the fields the parsers read.
+- **`.env` was never read outside a source checkout.** It loaded only `PROJECT_ROOT/.env`,
+  which for an installed package is `<venv>/Lib/.env` — a path no user writes to. The `.env`
+  workflow README documents did nothing for anyone who installed from PyPI. Now discovered
+  from the working directory upward.
+- **The response cache was written inside the virtualenv** (`<venv>/Lib/.cache`). Under
+  `uvx` — the install README recommends for the MCP server — that environment is ephemeral,
+  so the "persistent" cache was created and discarded on every run. Now a platform user cache
+  directory (`%LOCALAPPDATA%\pocmap\Cache`, `$XDG_CACHE_HOME/pocmap`, `~/.cache/pocmap`); a
+  source checkout still uses `<repo>/.cache`.
+- CVE records that name a package rather than a vendor/product pair (`packageName` +
+  `collectionURL`, e.g. CVE-2024-3094) now resolve a product instead of `N/A`, and the first
+  affected entry that actually names something is preferred over a blind `affected[0]`.
+- `pocmap doctor` no longer calls the MCP SDK "FastMCP".
+
 ## [2.6.2] - 2026-07-31
 
 ### Fixed

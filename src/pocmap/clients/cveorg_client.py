@@ -99,14 +99,24 @@ class CVEOrgClient:
         metadata = data.get("cveMetadata", {})
         containers = data.get("containers", {})
         cna = containers.get("cna", {})
-        affected = cna.get("affected", [{}])[0] if cna.get("affected") else {}
+        affected_list = cna.get("affected") or []
+        # Prefer the first entry that actually names a product. CNAs may file
+        # package-style records (packageName + collectionURL, no vendor/product
+        # — e.g. CVE-2024-3094), and some list a placeholder first, so taking
+        # affected[0] blindly reports "N/A" for a CVE that does name its target.
+        affected = next(
+            (a for a in affected_list if a.get("product") or a.get("packageName")),
+            affected_list[0] if affected_list else {},
+        )
 
         record: dict[str, Any] = {
             "cve_id": metadata.get("cveID", ""),
             "state": metadata.get("state", "UNKNOWN"),
             "publication_date": metadata.get("datePublished"),
             "vendor": affected.get("vendor") if affected else None,
-            "affected_product": affected.get("product") if affected else None,
+            "affected_product": (
+                (affected.get("product") or affected.get("packageName")) if affected else None
+            ),
         }
 
         # Handle rejected CVEs

@@ -2085,9 +2085,9 @@ def _check_python() -> CheckResult:
 
 
 def _check_mcp_extra() -> CheckResult:
-    """Check the optional FastMCP SDK (the ``[server]`` extra) is importable."""
+    """Check the optional MCP SDK (the ``[server]`` extra) is importable."""
     if importlib.util.find_spec("mcp") is not None:
-        return CheckResult("MCP server extra", "PASS", "FastMCP SDK importable", "extras")
+        return CheckResult("MCP server extra", "PASS", "MCP SDK importable", "extras")
     return CheckResult(
         "MCP server extra",
         "WARN",
