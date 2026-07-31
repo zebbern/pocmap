@@ -419,7 +419,7 @@ def _extractall(tar: tarfile.TarFile, dest: Path, members: list[tarfile.TarInfo]
     per-member containment check already applied by the caller.
     """
     if hasattr(tarfile, "data_filter"):
-        tar.extractall(dest, members=members, filter="data")  # noqa: S202 - filtered
+        tar.extractall(dest, members=members, filter="data")
     else:  # pragma: no cover - only on <3.10.12 / <3.11.4
         logger.debug("tarfile data filter unavailable; relying on member validation")
         tar.extractall(dest, members=members)  # noqa: S202 - members pre-validated

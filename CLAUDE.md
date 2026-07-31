@@ -35,7 +35,8 @@ Defaulting to internal knowledge often leads to outdated implementations. For ex
 - Python >=3.10 (developed/verified on 3.12). Fully type-annotated, `mypy --strict`.
 - pydantic v2 (models), typer + rich (CLI), requests/urllib3 (HTTP), beautifulsoup4, markdown, python-dotenv.
 - `mcp` SDK 2.x (`mcp.server.mcpserver.MCPServer`) for the MCP server — declared as the
-  `[server]` extra (`pip install "pocmap[server]"`). Serves protocol `2026-07-28`.
+  `[server]` extra (`pip install "pocmap[server]"`). Supports protocol revisions up to
+  `2026-07-28`; over STDIO an `initialize` handshake negotiates `2025-11-25` in practice.
 - Layered: CLI/MCP (presentation) → `services/` → `clients/` → `models` (pydantic). See README "Architecture".
 
 ## Project Structure — IMPORTANT

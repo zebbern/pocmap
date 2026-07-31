@@ -931,9 +931,12 @@ Pin a release with `pocmap-mcp@X.Y.Z` as the last arg (that PyPI version must in
 
 ### Running the MCP Server
 
-The MCP server requires the MCP SDK (`[server]` extra). It serves protocol
-`2026-07-28` (stateless core); the SDK still speaks earlier protocol versions to
-clients that have not upgraded:
+The MCP server requires the MCP SDK (`[server]` extra). The SDK supports protocol
+revisions up to `2026-07-28` (the stateless core), and negotiates down for clients that
+have not upgraded. Measured over STDIO — the default, and what Claude Desktop uses — a
+client performing the `initialize` handshake currently negotiates **`2025-11-25`**, since
+`2026-07-28` is reached through the stateless `server/discover` path rather than the
+handshake:
 
 ```bash
 pip install "pocmap[server]"

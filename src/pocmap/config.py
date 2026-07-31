@@ -236,7 +236,8 @@ class Settings:
         if self.user_agents_file.exists():
             agents = self.user_agents_file.read_text(encoding="utf-8").splitlines()
             if agents:
-                return random.choice(agents).strip()
+
+                return random.choice(agents).strip()  # noqa: S311
         from pocmap import __version__
 
         return f"pocmap/{__version__}"

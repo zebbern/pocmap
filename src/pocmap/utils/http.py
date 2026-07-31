@@ -42,7 +42,7 @@ from pocmap.utils.cache import HTTPCache
 BLOCKED_HOSTS = {
     "localhost",
     "127.0.0.1",
-    "0.0.0.0",
+    "0.0.0.0",  # noqa: S104 - a DENYlist entry; nothing here binds a socket
     "::1",
     "169.254.169.254",  # AWS metadata
     "metadata.google.internal",  # GCP metadata
@@ -481,7 +481,7 @@ def collect_source(name: str, fn: Callable[[], list[_T]]) -> tuple[list[_T], Sou
     """
     try:
         results = fn()
-    except Exception as exc:  # noqa: BLE001 - deliberately broad; re-raises bugs
+    except Exception as exc:
         if is_programming_error(exc):
             raise
         category, retryable = categorize_exception(exc)

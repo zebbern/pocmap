@@ -341,13 +341,16 @@ def _parse_fail_on(spec: str) -> Callable[[CVEInfo], bool]:
     Raises:
         FailOnError: If *spec* is not one of the supported forms.
     """
-    token = spec.strip().lower()
+    # Named ``policy`` rather than ``token``: this is a --fail-on grammar word,
+    # and a local called ``token`` compared to a literal trips the linter's
+    # hardcoded-credential heuristic for no reason.
+    policy = spec.strip().lower()
 
-    if token == "kev":
+    if policy == "kev":
         return lambda cve: bool(cve.kev_status)
 
-    if token in ("critical", "high"):
-        floor = _SEVERITY_ORDER["CRITICAL" if token == "critical" else "HIGH"]
+    if policy in ("critical", "high"):
+        floor = _SEVERITY_ORDER["CRITICAL" if policy == "critical" else "HIGH"]
 
         def _severity_pred(cve: CVEInfo) -> bool:
             if cve.cvss is None:
@@ -356,7 +359,7 @@ def _parse_fail_on(spec: str) -> Callable[[CVEInfo], bool]:
 
         return _severity_pred
 
-    match = _FAIL_ON_EPSS_RE.match(token)
+    match = _FAIL_ON_EPSS_RE.match(policy)
     if match:
         threshold = float(match.group("value"))
         return lambda cve: cve.epss is not None and cve.epss >= threshold

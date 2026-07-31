@@ -30,7 +30,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from mcp.server.lowlevel.server import CacheHint
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 from pocmap import __version__
 from pocmap.models import ExploitSource, LabPlatform
@@ -1008,7 +1010,72 @@ mcp = MCPServer(
     # is stateless, so host/port belong to the transport and are passed to
     # ``run()`` by :func:`main`. STDIO (the default) takes neither.
     version=__version__,
+    # Every list here is fixed at import — 22 tools, 3 prompts and 3 resource
+    # templates registered by decorator, with no runtime mutation and no
+    # list_changed notification anywhere. Without a hint the SDK advertises
+    # ttlMs 0, i.e. "already stale", so a client re-fetches an unchanging list
+    # on every reconnect. "public" because the lists do not vary by caller.
+    #
+    # These take effect only once a client negotiates 2026-07-28. Over STDIO
+    # today the ``initialize`` handshake settles on 2025-11-25 (verified), so
+    # the hints are currently inert — declared now so the behaviour is right
+    # the moment a client speaks the newer revision.
+    cache_hints={
+        "tools/list": CacheHint(ttl_ms=3_600_000, scope="public"),
+        "prompts/list": CacheHint(ttl_ms=3_600_000, scope="public"),
+        "resources/templates/list": CacheHint(ttl_ms=3_600_000, scope="public"),
+    },
 )
+
+
+# ---------------------------------------------------------------------------
+# Tool registration defaults
+# ---------------------------------------------------------------------------
+
+# Behavioural hints hosts use to decide what needs confirmation. Without them a
+# host must assume the worst of every tool, so 21 read-only lookups look as
+# risky as the one that writes to disk.
+_READ_ONLY = ToolAnnotations(
+    read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
+)
+# Same, but served from data shipped inside the package — no network at all.
+_LOCAL_ONLY = ToolAnnotations(
+    read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+)
+# verify_github_pocs downloads third-party exploit source and extracts it under
+# POCMAP_POC_SOURCE_DIR. Not destructive (it only writes into its own cache),
+# but genuinely not read-only, and a host should be able to tell.
+_WRITES_TO_DISK = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True
+)
+
+
+def _tool(
+    *, name: str, description: str, annotations: ToolAnnotations = _READ_ONLY
+) -> Any:
+    """Register a tool with pocmap's house defaults.
+
+    ``structured_output=False`` is deliberate. Every tool is annotated ``-> str``
+    and returns a JSON *string*, so the SDK would otherwise derive the schema
+    from that annotation and advertise ``{"result": {"type": "string"}}`` on all
+    22 tools while wrapping the payload as ``structuredContent: {"result":
+    "<json string>"}`` — the content JSON-encoded twice, behind a schema that
+    describes none of it. That is worse than declaring no schema: a client that
+    validates against it learns nothing, and one that trusts it gets a string
+    where the tool documents an object. Callers read ``content[0].text`` and
+    parse it, which is unchanged.
+
+    Returning real objects with per-tool schemas (pocmap already exports 13
+    pydantic JSON Schemas that describe exactly these payloads) is the better
+    end state and is tracked separately — it changes the return type of all 22
+    tools and is not a drive-by edit.
+    """
+    return mcp.tool(
+        name=name,
+        description=description,
+        annotations=annotations,
+        structured_output=False,
+    )
 
 
 # ===========================================================================
@@ -1092,7 +1159,7 @@ def _ok(data: Any) -> str:
 # CVE Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool(
+@_tool(
     name="lookup_cve",
     description=(
         "Look up detailed information about a CVE (Common Vulnerabilities and Exposures) identifier. "
@@ -1131,7 +1198,7 @@ def lookup_cve(cve_id: str) -> str:
         return _tool_error(e, f"lookup_cve({cve_id})")
 
 
-@mcp.tool(
+@_tool(
     name="get_epss_score",
     description=(
         "Get the EPSS (Exploit Prediction Scoring System) score for a CVE. "
@@ -1180,7 +1247,7 @@ def get_epss_score(cve_id: str) -> str:
         return _tool_error(e, f"get_epss_score({cve_id})")
 
 
-@mcp.tool(
+@_tool(
     name="check_kev_status",
     description=(
         "Check if a CVE is listed in the CISA Known Exploited Vulnerabilities (KEV) catalog. "
@@ -1225,7 +1292,7 @@ def check_kev_status(cve_id: str) -> str:
 # Exploit Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool(
+@_tool(
     name="find_github_pocs",
     description=(
         "Find GitHub repositories containing Proof-of-Concept (PoC) exploits for a CVE. "
@@ -1264,7 +1331,7 @@ def find_github_pocs(cve_id: str, limit: int = 10) -> str:
         return _tool_error(e, f"find_github_pocs({cve_id})")
 
 
-@mcp.tool(
+@_tool(
     name="get_attack_techniques",
     description=(
         "Get the MITRE ATT&CK techniques a CVE maps to — how it is exploited, and what "
@@ -1309,7 +1376,8 @@ def get_attack_techniques(cve_id: str) -> str:
         return _tool_error(e, f"get_attack_techniques({cve_id})")
 
 
-@mcp.tool(
+@_tool(
+    annotations=_WRITES_TO_DISK,
     name="verify_github_pocs",
     description=(
         "Read the SOURCE of the top GitHub PoC repositories for a CVE and report what "
@@ -1375,7 +1443,7 @@ def verify_github_pocs(cve_id: str, limit: int = 5) -> str:
         return _tool_error(e, f"verify_github_pocs({cve_id})")
 
 
-@mcp.tool(
+@_tool(
     name="find_metasploit_module",
     description=(
         "Find a Metasploit Framework module for a CVE. "
@@ -1416,7 +1484,7 @@ def find_metasploit_module(cve_id: str, limit: int = 1) -> str:
         return _tool_error(e, f"find_metasploit_module({cve_id})")
 
 
-@mcp.tool(
+@_tool(
     name="find_exploitdb_entry",
     description=(
         "Find an ExploitDB entry for a CVE. "
@@ -1457,7 +1525,7 @@ def find_exploitdb_entry(cve_id: str, limit: int = 1) -> str:
         return _tool_error(e, f"find_exploitdb_entry({cve_id})")
 
 
-@mcp.tool(
+@_tool(
     name="find_nuclei_template",
     description=(
         "Find a Nuclei vulnerability scanner template for a CVE. "
@@ -1503,7 +1571,7 @@ def find_nuclei_template(cve_id: str, limit: int = 1) -> str:
 # Bug Bounty Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool(
+@_tool(
     name="find_bug_bounty_reports",
     description=(
         "Find bug bounty reports and write-ups for a CVE. "
@@ -1541,7 +1609,7 @@ def find_bug_bounty_reports(cve_id: str) -> str:
 # Lab Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool(
+@_tool(
     name="find_practice_labs",
     description=(
         "Find CTF (Capture The Flag) labs, vulnerable machines, and practice environments "
@@ -1574,7 +1642,7 @@ def find_practice_labs(cve_id: str) -> str:
         return _tool_error(e, f"find_practice_labs({cve_id})")
 
 
-@mcp.tool(
+@_tool(
     name="find_vulhub_docker",
     description=(
         "Find a Vulhub Docker environment for a CVE. "
@@ -1626,7 +1694,7 @@ def find_vulhub_docker(cve_id: str) -> str:
 # CPE Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool(
+@_tool(
     name="cve_to_cpe",
     description=(
         "Convert a CVE ID to its associated CPE (Common Platform Enumeration) identifiers. "
@@ -1660,7 +1728,7 @@ def cve_to_cpe(cve_id: str) -> str:
         return _tool_error(e, f"cve_to_cpe({cve_id})")
 
 
-@mcp.tool(
+@_tool(
     name="cpe_to_cve",
     description=(
         "Convert a CPE (Common Platform Enumeration) identifier to its associated CVEs. "
@@ -1696,7 +1764,7 @@ def cpe_to_cve(cpe: str) -> str:
 # Product Discovery Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool(
+@_tool(
     name="discover_product_cves",
     description=(
         "Discover CVEs affecting a product by name and version. "
@@ -1752,7 +1820,7 @@ def discover_product_cves(
         return _tool_error(e, f"discover_product_cves({product})")
 
 
-@mcp.tool(
+@_tool(
     name="discover_package_cves",
     description=(
         "Find vulnerabilities in a software PACKAGE (a dependency) and the exact releases "
@@ -1829,7 +1897,7 @@ def discover_package_cves(
 # Report Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool(
+@_tool(
     name="generate_json_report",
     description=(
         "START HERE for any question about one or more known CVE IDs. Returns everything "
@@ -1874,7 +1942,7 @@ def generate_json_report(cve_ids: str) -> str:
         return _tool_error(e, f"generate_json_report({cve_ids})")
 
 
-@mcp.tool(
+@_tool(
     name="generate_html_report",
     description=(
         "Generate a comprehensive HTML vulnerability report for one or more CVEs. "
@@ -1919,7 +1987,7 @@ def generate_html_report(cve_ids: str) -> str:
 # Recent CVE Discovery Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool(
+@_tool(
     name="find_recent_exploits",
     description=(
         "Find recently published CVEs with exploit and PoC intelligence. "
@@ -2027,7 +2095,8 @@ def _load_playbook(filename: str) -> str:
         return json.dumps({"error": f"Failed to load playbook ({type(e).__name__})"})
 
 
-@mcp.tool(
+@_tool(
+    annotations=_LOCAL_ONLY,
     name="get_cve_assessment_playbook",
     description=(
         "Get the complete CVE assessment playbook with detailed step-by-step workflow. "
@@ -2047,7 +2116,8 @@ def get_cve_assessment_playbook() -> str:
     return _load_playbook("cve-assessment-playbook.json")
 
 
-@mcp.tool(
+@_tool(
+    annotations=_LOCAL_ONLY,
     name="get_rapid_response_playbook",
     description=(
         "Get the rapid response playbook for emergency critical CVE handling. "
@@ -2067,7 +2137,8 @@ def get_rapid_response_playbook() -> str:
     return _load_playbook("rapid-response-playbook.json")
 
 
-@mcp.tool(
+@_tool(
+    annotations=_LOCAL_ONLY,
     name="get_bug_bounty_playbook",
     description=(
         "Get the bug bounty submission playbook from finding to report submission. "

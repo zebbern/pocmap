@@ -858,4 +858,4 @@ When the MCP client supports resources, use these URI patterns:
 
 - MCP server implementation lives in `src/pocmap/mcp_server.py`, exposed as the `pocmap-mcp` console script and `python -m pocmap.mcp_server`; repo-root `mcp_server.py` is a thin launcher shim.
 - Do not target a top-level `mcp_server` module for the console script — that name collides with unrelated site-packages; use `pocmap.mcp_server:main`.
-- The `[server]` extra requires `mcp>=2.0,<3` and builds on `mcp.server.mcpserver.MCPServer` (the 2.x rename of `FastMCP`). The server reports protocol `2026-07-28`; host/port moved off the constructor onto `run()`, since the protocol core is now stateless.
+- The `[server]` extra requires `mcp>=2.0,<3` and builds on `mcp.server.mcpserver.MCPServer` (the 2.x rename of `FastMCP`). The SDK supports up to protocol `2026-07-28`, but over STDIO an `initialize` handshake negotiates `2025-11-25` (verified live) — `2026-07-28` is the stateless `server/discover` path. Host/port moved off the constructor onto `run()`, since the protocol core is now stateless.

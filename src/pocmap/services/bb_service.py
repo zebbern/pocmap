@@ -79,11 +79,14 @@ class BugBountyService:
         if pl:
             results.append(pl)
 
-        # Only search Bug Bounty Hunting if PentesterLand had no results
-        if not pl:
-            bbh = self.search_bugbounty_hunting(cve_id)
-            if bbh:
-                results.append(bbh)
+        # Both of these are independent write-up indexes, so a hit in one says
+        # nothing about the other. Gating Bug Bounty Hunting on PentesterLand
+        # missing made the *presence* of one result suppress a second, which is
+        # backwards — and doubly so now that PentesterLand's feed has not moved
+        # since 2024, so an old hit could permanently hide the other source.
+        bbh = self.search_bugbounty_hunting(cve_id)
+        if bbh:
+            results.append(bbh)
 
         logger.info("Found %d bug bounty reports for %s", len(results), cve_id)
         return results

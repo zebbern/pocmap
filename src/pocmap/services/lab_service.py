@@ -15,6 +15,7 @@ Example::
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -27,6 +28,10 @@ from pocmap.utils.registry import PluginRegistry
 from pocmap.utils.validators import validate_cve_id
 
 logger = logging.getLogger(__name__)
+
+# 0xdf titles a machine writeup "HTB: <MachineName>"; anything else under a CVE
+# heading (a "Beyond Root" follow-up, a non-HTB target) is not a machine.
+_HTB_MACHINE_RE = re.compile(r"^HTB:\s+(\S+)")
 
 
 class LabService:
@@ -150,11 +155,23 @@ class LabService:
             soup = BeautifulSoup(resp_text, "html.parser")
             cve_selector = soup.select(f'h2[id="{cve_id}" i] + ul')
             if cve_selector:
-                machine_name = cve_selector[0].select("a")[0].text.split()[1]
-                return LabEnvironment(
-                    platform=LabPlatform.HACKTHEBOX,
-                    name=machine_name,
-                    url=f"https://www.hackthebox.com/machines/{machine_name.lower()}",
+                # Take the first link that is actually an "HTB: <Machine>" post.
+                # Blindly reading ``select("a")[0].text.split()[1]`` assumed every
+                # first link had that shape; when it does not — a "Beyond Root"
+                # follow-up, a writeup for a non-HTB target — the second token is
+                # not a machine name, and the URL built from it 404s. Inventing a
+                # plausible-looking lab link is worse than reporting none.
+                for link in cve_selector[0].select("a"):
+                    match = _HTB_MACHINE_RE.match(link.text.strip())
+                    if match:
+                        machine_name = match.group(1)
+                        return LabEnvironment(
+                            platform=LabPlatform.HACKTHEBOX,
+                            name=machine_name,
+                            url=f"https://www.hackthebox.com/machines/{machine_name.lower()}",
+                        )
+                logger.debug(
+                    "0xdf lists %s but no 'HTB: <machine>' post under it", cve_id
                 )
         except Exception as exc:
             if is_programming_error(exc) or isinstance(exc, OfflineError):
@@ -175,10 +192,22 @@ class LabService:
         return self._search_tryhackme(cve_id)
 
     def _search_tryhackme(self, cve_id: str) -> LabEnvironment | None:
-        """Internal: search TryHackMe for rooms related to a CVE."""
+        """Internal: search TryHackMe for rooms related to a CVE.
+
+        Note the index this reads (``THM_ROOMS_URL``) is not currently published,
+        so this returns ``None`` for every CVE. The miss is logged rather than
+        swallowed: a source that is *absent* and a CVE that genuinely has no room
+        are different answers, and only one of them is about the CVE.
+        """
         try:
             text = fetch_text(THM_ROOMS_URL, headers=settings.default_headers)
             if not text:
+                logger.warning(
+                    "TryHackMe room index unavailable (%s); reporting no room for %s "
+                    "— this is a missing source, not an absence of rooms",
+                    THM_ROOMS_URL,
+                    cve_id,
+                )
                 return None
 
             for line in text.splitlines():

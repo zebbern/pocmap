@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+# >=77 is what understands the PEP 639 SPDX ``license`` string below.
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +8,11 @@ name = "pocmap"
 dynamic = ["version"]
 description = "A modern, AI-friendly CVE PoC discovery tool with structured data models"
 readme = "README.md"
-license = {text = "MIT"}
+# PEP 639 SPDX expression. The ``{text = ...}`` table and the paired
+# "License :: OSI Approved" classifier are both deprecated and scheduled for
+# removal from the packaging toolchain.
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     {name = "PocMap Contributors"},
 ]
@@ -16,7 +21,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -27,27 +31,38 @@ classifiers = [
     "Typing :: Typed",
 ]
 requires-python = ">=3.10"
+# Floors are the lowest version that is both functional AND free of known
+# advisories — a security tool that resolves to a vulnerable dependency is
+# hard to defend. Each was verified with `pocmap package PyPI <name> --version
+# <floor>` (see CHANGELOG 2.5.0); re-check with the same command when bumping.
 dependencies = [
-    "pydantic>=2.0",
-    "requests>=2.28",
-    "urllib3>=2.0",
-    "typer>=0.9",
-    "click>=8.0",
+    # 2.0.2 raises AttributeError: __pydantic_core_schema__ on the forward
+    # reference in ProductDiscoveryResult, breaking `pocmap schemas`; 2.4.0
+    # also clears CVE-2024-3772.
+    "pydantic>=2.4.0",
+    "requests>=2.33.0",   # CVE-2026-25645 and three older
+    "urllib3>=2.7.0",     # CVE-2026-44431; 2.0 carried 8 advisories
+    "typer>=0.16",        # older releases cannot parse `Annotated[str | None, ...]`
+    "click>=8.3.3",       # CVE-2026-7246
     "rich>=13.0",
     "beautifulsoup4>=4.12",
-    "markdown>=3.5",
-    "jinja2>=3.0",
+    "markdown>=3.8.1",    # CVE-2025-69534 — reachable from a fetched README
+    "jinja2>=3.1.6",      # CVE-2024-56201 and two older
     "tomli>=2.0; python_version<'3.11'",
     "typing_extensions>=4.0; python_version<'3.11'",
-    "python-dotenv>=1.0",
+    "python-dotenv>=1.2.2",  # CVE-2026-28684
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "mypy>=1.5",
-    "ruff>=0.1",
+    # Floors match what CI actually validates against. The previous floors
+    # (mypy>=1.5, ruff>=0.1) name versions that report spurious errors on this
+    # codebase, so a contributor installing the declared dev environment saw
+    # failures CI does not.
+    "mypy>=2.0",
+    "ruff>=0.15",
     "types-beautifulsoup4",
     "types-requests",
 ]
@@ -87,8 +102,19 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
+# ``S`` (flake8-bandit) is the point of a security tool linting itself: it is
+# what would catch a future subprocess(shell=True), yaml.load, pickle or weak
+# hash. ``RUF100`` flags suppressions that no longer suppress anything — six
+# ``# noqa: S...`` directives had been inert because ``S`` was never enabled,
+# which is how the gap was found.
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "S", "RUF100"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, bind fixtures to obvious dummy tokens, use fixed seeds, and
+# spawn `sys.executable` with a literal script to inspect the MCP surface out
+# of process. None of those are the untrusted-input cases ``S`` exists for.
+"tests/*" = ["S101", "S105", "S106", "S311", "S603", "S607"]
 
 [tool.mypy]
 python_version = "3.10"

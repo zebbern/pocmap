@@ -105,6 +105,58 @@ where the CPE path is blind.
   breaking `json.loads` and losing the reason; and `--output` was validated only *after*
   the document had been written to stdout. Both now fail cleanly.
 - Gzip decoding is bounded, so a crafted response body cannot expand without limit.
+- **The HackTheBox lab parser no longer invents machine names.** It read the first link
+  under a CVE heading and took its second whitespace-delimited token, assuming every post
+  is titled `HTB: <Machine>`. When the first post is a "Beyond Root" follow-up, that yields
+  a machine name that does not exist and a confident link to a 404. It now matches
+  `HTB: <name>` explicitly and reports nothing when no post qualifies.
+- **A stale bug-bounty source no longer suppresses a live one.** Bug Bounty Hunting was
+  only queried when PentesterLand missed, so a hit in one hid the other — and
+  PentesterLand's feed has not moved since 2024, making the suppression permanent for older
+  CVEs. Both are now queried independently.
+- **A missing TryHackMe index is reported as missing.** `THM_ROOMS_URL` 404s, so that
+  lookup returned `None` for every CVE, indistinguishable from "no room exists". It now
+  logs a warning naming the unavailable source.
+- **MCP: dropped a vacuous output schema on all 22 tools.** Because every tool is annotated
+  `-> str`, the SDK derived `outputSchema: {"result": {"type": "string"}}` and wrapped the
+  already-JSON payload as `structuredContent: {"result": "<json string>"}` — encoded twice,
+  behind a schema describing none of it. Declaring no schema is more honest;
+  `content[0].text` is unchanged. Returning real objects with per-tool schemas is the
+  better end state and is tracked separately.
+- **MCP: every tool now declares behavioural annotations.** Without them a host must assume
+  the worst of all 22; 21 are `readOnlyHint`, the 3 playbooks are additionally closed-world,
+  and only `verify_github_pocs` (which writes third-party source to disk) is not read-only.
+- MCP list results carry cache hints instead of the default "already stale" `ttlMs: 0`.
+  These apply once a client negotiates 2026-07-28.
+- CI now tests Python 3.13, which the classifiers already advertised but nothing verified.
+- `actions/upload-artifact` and `actions/download-artifact` moved off Node 20 (v4 -> v7/v8),
+  which GitHub is removing from runners. `checkout@v5`/`setup-python@v6` were checked and
+  are already Node 24, so they were left alone.
+- `license = {text = "MIT"}` became the PEP 639 SPDX string (the table form has a removal
+  date), and the paired `License ::` classifier was dropped.
+- Documentation now states the protocol accurately: the SDK supports up to `2026-07-28`,
+  but over STDIO an `initialize` handshake negotiates `2025-11-25` in practice.
+
+### Security
+
+Dependency floors are now the lowest version that is both functional **and** free of known
+advisories. The old floors resolved to versions with published CVEs — verified by pointing
+pocmap's own new `package` command at them:
+
+| Dependency | Was | Now | Why |
+|---|---|---|---|
+| `urllib3` | `>=2.0` | `>=2.7.0` | 8 advisories at the old floor, incl. two HIGH |
+| `click` | `>=8.0` | `>=8.3.3` | CVE-2026-7246 (HIGH) |
+| `markdown` | `>=3.5` | `>=3.8.1` | CVE-2025-69534 (HIGH) — reachable from a fetched README |
+| `jinja2` | `>=3.0` | `>=3.1.6` | CVE-2024-56201 and two older |
+| `requests` | `>=2.28` | `>=2.33.0` | CVE-2026-25645 and three older |
+| `python-dotenv` | `>=1.0` | `>=1.2.2` | CVE-2026-28684 |
+| `pydantic` | `>=2.0` | `>=2.4.0` | CVE-2024-3772; 2.0.2 also breaks `pocmap schemas` |
+| `typer` | `>=0.9` | `>=0.16` | older releases cannot parse the CLI's `Annotated[str \| None, ...]` |
+
+`ruff` now runs the `S` (bandit) and `RUF100` rule sets. `S` is the check that would catch
+a future `subprocess(shell=True)`, `yaml.load` or weak hash in a security tool; `RUF100`
+found six `# noqa: S...` directives that had been inert because `S` was never enabled.
 
 ### Changed
 - **`POCMAP_POC_SOURCE_MAX_MB` now defaults to 100 MB (was 20), and
