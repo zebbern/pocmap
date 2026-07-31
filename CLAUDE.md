@@ -48,8 +48,9 @@ Defaulting to internal knowledge often leads to outdated implementations. For ex
   `structuredContent`. Resources and prompts still return `str`. Register tools through the
   local `_tool()` helper, which applies the house `ToolAnnotations` defaults.
 - **MCP server implementation** is `src/pocmap/mcp_server.py` (22 tools, 3 resources, 3 prompts), exposed as
-  the `pocmap-mcp` console script. Repo-root `mcp_server.py` is a thin launcher shim; `mcp_transport_stdio.py`
-  / `mcp_transport_sse.py` remain at the repo root for alternate transports.
+  the `pocmap-mcp` console script. Repo-root `mcp_server.py` is a thin launcher shim that also
+  puts `src/` on `sys.path`, so `python mcp_server.py` works in a clone that was never installed.
+  It forwards every flag to `main()`, so `--transport sse|http` works through it too.
 - Playbook JSON is loaded from `src/pocmap/bugbounty/playbooks/`.
 
 ## Testing

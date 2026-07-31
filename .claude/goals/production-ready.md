@@ -1,14 +1,14 @@
 ## /goal: production-ready
 
 **Category**: VERIFY
-**Scope**: Defines "ready for real professional use" for pocmap (Python CVE/PoC/exploit-discovery library + Typer CLI + FastMCP server, `src/` layout). Covers correctness, code health, packaging, docs, security, and test integrity. Excludes new features.
+**Scope**: Defines "ready for real professional use" for pocmap (Python CVE/PoC/exploit-discovery library + Typer CLI + MCP server, `src/` layout). Covers correctness, code health, packaging, docs, security, and test integrity. Excludes new features.
 
 ### Objective
 A competent security engineer can install pocmap from a clean checkout, run the CLI, MCP server, and library by following only the repo's own docs, and trust that its guards, types, packaging, and documentation are consistent and truthful.
 
 ### Success Criteria (verify ALL)
 - Single source of truth: divergent shadow modules reconciled — root `models.py`/`services.py`/`__init__.py` removed or unified so `src/pocmap/` is authoritative and `mcp_server.py` never silently falls back to stale mocks.
-- Packaging complete: every runtime import (incl. `mcp`/FastMCP) is declared in `pyproject.toml`; `pip install -e ".[dev]"` plus documented steps yield a working CLI, importable API, and launchable server.
+- Packaging complete: every runtime import (incl. `mcp`) is declared in `pyproject.toml`; `pip install -e ".[dev]"` plus documented steps yield a working CLI, importable API, and launchable server.
 - Tests: the documented test command runs with zero collection errors and 0 failures on the offline suite; network-dependent tests are separated/marked; pytest config points where tests actually live.
 - Types & lint clean: `ruff check src` and `mypy src` (strict) report 0 errors, or each remaining item is explicitly justified.
 - Docs match code: MCP tool names, CLI commands, service method names, sync-vs-async, env vars, and run commands across AGENTS.md / mcp_config.json / skills / README all match source (0 drift).
@@ -34,4 +34,4 @@ An independent reviewer, from a clean checkout, re-runs the documented install p
 - Silent truncation of coverage: explicitly list any area not audited.
 
 ### Context
-Security-sensitive tool that fetches attacker-adjacent content and handles API tokens; guards must never regress. Baseline facts: `src/` is authoritative; MCP lives in `pocmap.mcp_server` (`pocmap-mcp` / `python -m pocmap.mcp_server`; repo-root `mcp_server.py` is a launcher shim); the public API is synchronous; 19 MCP tools / 12 CLI commands.
+Security-sensitive tool that fetches attacker-adjacent content and handles API tokens; guards must never regress. Baseline facts: `src/` is authoritative; MCP lives in `pocmap.mcp_server` (`pocmap-mcp` / `python -m pocmap.mcp_server`; repo-root `mcp_server.py` is a launcher shim); the public API is synchronous; 22 MCP tools / 13 CLI commands.
