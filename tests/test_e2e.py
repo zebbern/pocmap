@@ -30,7 +30,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 # ---------------------------------------------------------------------------
 # Imports from the package under test
 # ---------------------------------------------------------------------------
-import pytest  # noqa: E402
+import pytest
 
 from pocmap.bugbounty.checklists import MasterChecklist
 from pocmap.bugbounty.prioritization import (
@@ -720,7 +720,6 @@ def print_summary():
     total = len(RESULTS)
 
     for result in RESULTS:
-        status = "PASS" if result.passed else "FAIL"
         icon = "[PASS]" if result.passed else "[FAIL]"
         print(f"\n{icon} {result.name}")
         if result.passed and result.details:

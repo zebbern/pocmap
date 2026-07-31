@@ -51,3 +51,34 @@ def test_prioritization_scales_small_epss():
 
 def test_prioritization_scales_high_epss():
     assert math.isclose(_get_epss_score(SimpleNamespace(epss=97.5)), 0.975, rel_tol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# The 0-100 -> 0-1 divide must not leak binary float noise into the payload
+# ---------------------------------------------------------------------------
+
+def test_normalize_rounds_away_float_noise():
+    """``99.99 / 100`` is ``0.9998999999999999`` in binary floating point.
+
+    That reached MCP clients verbatim as ``epss_score``. EPSS publishes 5
+    decimal places, so rounding there is lossless and keeps 12 junk digits out
+    of an agent-facing field.
+    """
+    info = SimpleNamespace(epss=99.99)
+    assert mcp_server.ServiceAdapter._normalize_cve_info(info)["epss_score"] == 0.9999
+
+
+def test_get_epss_rounds_away_float_noise(monkeypatch):
+    """``get_epss_score`` divides on a separate path and must round identically."""
+    adapter = mcp_server.ServiceAdapter.__new__(mcp_server.ServiceAdapter)
+    adapter._cve = SimpleNamespace(  # type: ignore[attr-defined]
+        get_cve_info=lambda _cve_id: SimpleNamespace(epss=99.99)
+    )
+    assert adapter.get_epss("CVE-2021-44228") == 0.9999
+
+
+def test_rounding_preserves_epss_published_precision():
+    """EPSS publishes 5 dp — rounding must not truncate a real value."""
+    for pct, expected in [(0.001, 0.00001), (0.023, 0.00023), (12.345, 0.12345)]:
+        info = SimpleNamespace(epss=pct)
+        assert mcp_server.ServiceAdapter._normalize_cve_info(info)["epss_score"] == expected

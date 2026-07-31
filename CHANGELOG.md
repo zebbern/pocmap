@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.2] - 2026-07-31
+
+### Fixed
+
+- **`epss_score` no longer leaks binary float noise.** The 0-100 -> 0-1 conversion is a
+  plain divide, and `99.99 / 100` is `0.9998999999999999` — which reached MCP clients
+  verbatim on `lookup_cve` and `get_epss_score`. EPSS publishes 5 decimal places, so the
+  result is now rounded to 5: `0.9999`. Lossless, and 12 junk digits out of an
+  agent-facing field. `discover_package_cves` already rounded; all three paths now share
+  one constant.
+
+### Changed
+
+- CI lints `tests/` as well as `src/`. The test tree had 17 standing ruff violations that
+  nothing ran against; all are fixed. Two legacy script-runner suites keep a declared
+  `E402` exemption because they bootstrap `sys.path` to stay runnable directly from a
+  clone — imports must follow that block by construction.
+- `tests/test_edge_cases.py` now asserts its `valid_cases`. They had been declared and
+  never exercised, so only *rejection* of malformed CVE IDs was covered — a well-formed
+  ID being wrongly rejected would have gone unnoticed.
+
 ## [2.6.1] - 2026-07-31
 
 ### Fixed

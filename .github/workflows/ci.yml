@@ -32,7 +32,7 @@ jobs:
           pip install -e ".[dev,server]"
 
       - name: Lint (ruff)
-        run: ruff check src
+        run: ruff check src tests
 
       - name: Type check (mypy --strict)
         run: mypy src

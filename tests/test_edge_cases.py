@@ -516,9 +516,20 @@ def test_cve_id_format_validation():
         ("CVE-ABCD-1234", "Letters in year"),
     ]
 
+    # These were declared but never exercised — a well-formed CVE ID being
+    # *rejected* is as much a bug as a malformed one being accepted.
+    for case in valid_cases:
+        try:
+            normalized = validate_cve_id_v2(case)
+            record_test(f"CVE format: valid '{case}'", True,
+                       detail=f"Accepted, normalized to '{normalized}'")
+        except Exception as e:
+            record_test(f"CVE format: valid '{case}'", False,
+                       detail=f"REGRESSION: rejected valid CVE '{case}' ({type(e).__name__}: {e})")
+
     for case, desc in invalid_cases:
         try:
-            result = validate_cve_id_v2(case)
+            validate_cve_id_v2(case)
             record_test(f"CVE format: {desc}", False,
                        detail=f"SECURITY ISSUE: '{case}' accepted as valid CVE!")
         except ValueError:

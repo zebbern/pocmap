@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "src
 # Imports under test
 # ---------------------------------------------------------------------------
 
-import pytest  # noqa: E402
+import pytest
 
 from pocmap.data.product_aliases import PRODUCT_ALIASES
 from pocmap.services.product_service import (
@@ -659,7 +659,7 @@ test(
 
 # Check that all canonical entries are in the reverse map
 all_canonical_present = all(
-    canonical.lower() in reverse_map for canonical in PRODUCT_ALIASES.keys()
+    canonical.lower() in reverse_map for canonical in PRODUCT_ALIASES
 )
 test(
     "46. All canonical product names are in reverse map",
@@ -670,7 +670,7 @@ test(
 # Check that all aliases are in the reverse map
 all_aliases_present = True
 missing_aliases = []
-for canonical, aliases in PRODUCT_ALIASES.items():
+for aliases in PRODUCT_ALIASES.values():
     for alias in aliases:
         if alias.lower() not in reverse_map:
             all_aliases_present = False

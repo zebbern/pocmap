@@ -251,6 +251,11 @@ def _build_html_report(
 # Service adapter - normalizes pocmap service results into plain dicts
 # ---------------------------------------------------------------------------
 
+# EPSS is published to 5 decimal places, so rounding the 0-100 -> 0-1
+# conversion there is lossless and keeps float noise out of the payload.
+_EPSS_DP = 5
+
+
 class ServiceAdapter:
     """Adapter that wraps the pocmap services and normalizes their results
     into plain, JSON-serializable dicts for the MCP tool layer."""
@@ -301,7 +306,9 @@ class ServiceAdapter:
             info = self._cve.get_cve_info(cve_id)
             epss = info.epss
             # CVEInfo.epss is on a 0-100 scale; normalize to a 0-1 probability.
-            return epss / 100.0 if epss is not None else None
+            # Rounded to 5 dp — EPSS publishes 5, and a bare divide leaks float
+            # noise (99.99 / 100 -> 0.9998999999999999) into the payload.
+            return round(epss / 100.0, _EPSS_DP) if epss is not None else None
         except Exception as e:
             if is_programming_error(e):
                 raise
@@ -752,7 +759,7 @@ class ServiceAdapter:
             "severity": ServiceAdapter._enum_val(vuln.severity, "UNKNOWN"),
             "cvss_score": vuln.cvss_score,
             "cvss_vector": vuln.cvss_vector,
-            "epss_score": round(epss / 100.0, 5) if epss is not None else None,
+            "epss_score": round(epss / 100.0, _EPSS_DP) if epss is not None else None,
             "kev_status": bool(vuln.kev_status),
             "fixed_versions": list(vuln.fixed_versions),
             "introduced_versions": list(vuln.introduced_versions),
@@ -808,7 +815,7 @@ class ServiceAdapter:
         cve_id = getattr(info, "id", "UNKNOWN")
         # CVEInfo.epss is on a 0-100 scale; normalize to a 0-1 probability.
         epss_raw = getattr(info, "epss", None)
-        epss = epss_raw / 100.0 if epss_raw is not None else None
+        epss = round(epss_raw / 100.0, _EPSS_DP) if epss_raw is not None else None
 
         kev = bool(getattr(info, "kev_status", False))
 
