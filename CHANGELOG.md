@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.7] - 2026-07-31
+
+An audit that verified every AGENTS.md claim by actually invoking the tools. 14 discrepancies
+confirmed, none refuted. The code bugs below all shared one shape: **a silent negative** — a
+documented filter or field that returned "nothing" when the truth was "not checked".
+
+### Fixed
+
+- **`find_recent_exploits --kev-only` matched nothing, ever.** NVD's boolean query parameters
+  are valueless flags; pocmap sent `hasKev=true`, NVD answered **HTTP 404**, and the error was
+  swallowed into an empty result. Verified against Log4Shell's publication day: `hasKev=true`
+  -> 404, `hasKev` -> 1 result.
+- **`kev_status` and `epss` were never populated** in `find_recent_exploits`. `kev_status` was
+  hardcoded `False` and EPSS was enriched only when `--min-epss` was passed, so `sort=epss`
+  ranked on nulls and every row claimed "not in KEV" — including CVEs `check_kev_status`
+  calls KEV in the same process. Both now come from the cached bulk feeds: one download per
+  feed for the whole page, not one call per CVE.
+- **`discover_product_cves` never enriched EPSS or KEV either**, while AGENTS.md told agents
+  these entries "already carry full details (CVSS, EPSS, KEV, description)". The documented
+  prioritization therefore ranked everything equally.
+- **A malformed identifier was reported as a finding, not an error.** Only 3 of 13 CVE-taking
+  tools validated input: `check_kev_status("CVE202144228")` returned `kev_status: false` —
+  which reads as "not actively exploited" — and `cve_to_cpe`/`cpe_to_cve` returned
+  `total_count: 0`, indistinguishable from a real empty answer. Validation now lives in the
+  shared tool decorator, so all 13 return an `invalid_input` envelope and any tool added later
+  inherits the guard. Tool schemas and annotations are unchanged.
+- `PackageVulnerability.has_fix` is a `computed_field`, so it survives `model_dump()` — it was
+  present via MCP but missing from the CLI's `--format json` and from the exported JSON Schema,
+  which a script written against the documented shape would `KeyError` on. `export_schemas()`
+  now emits serialization-mode schemas so computed fields appear.
+
+### Documentation
+
+`AGENTS.md` corrected where it did not match real output: `publication_date` is a display
+string (`"10 Dec 2021"`), not ISO; `vendor`/`product`/`affected_products` carry the CNA's own
+wording rather than lowercase CPE slugs; the normalizer also drops `ransomware_usage` and
+`rejected_reason`; `generate_json_report` returns `entries` as a **list** while the
+`MultiReport` Python model is a dict; `discover_product_cves` tier entries are **flat** (no
+`cve_info` wrapper, so the documented `cve_info.epss_score` path raised `KeyError`);
+`cpe_to_cve` needs a **version-qualified** CPE or it returns 0; `language` has two unknown
+forms (`null` when un-enriched, the string `"N/A"` when enriched); and a `total_count: 0`
+from `find_github_pocs` means *unknown* when `sources[]` reports `rate_limited`.
+
 ## [2.6.6] - 2026-07-31
 
 ### Fixed

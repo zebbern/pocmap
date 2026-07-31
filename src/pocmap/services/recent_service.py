@@ -202,10 +202,15 @@ class RecentService:
         converted = [self._convert_raw_cve(v) for v in raw_vulns]
         cve_infos: list[CVEInfo] = [c for c in converted if c is not None]
 
-        # Apply EPSS filter. NVD does not expose EPSS, so the score is
-        # enriched from the EPSS dataset first (only when a filter is set).
+        # NVD returns neither EPSS nor KEV, so both are enriched from pocmap's
+        # cached bulk feeds. Done unconditionally: each is ONE cached download
+        # for the whole result set, not a call per CVE, and leaving them unset
+        # made `epss` null and `kev_status` false on every row — breaking
+        # `sort="epss"` and contradicting the documented response shape.
+        cve_infos = self._enrich_epss(cve_infos)
+        cve_infos = self._enrich_kev(cve_infos)
+
         if min_epss is not None and min_epss > 0:
-            cve_infos = self._enrich_epss(cve_infos)
             cve_infos = self._filter_by_epss(cve_infos, min_epss)
 
         # Apply PoC filter
@@ -389,9 +394,11 @@ class RecentService:
             if severity:
                 params["cvssV3Severity"] = severity
 
-            # Add KEV filter
+            # Add KEV filter. NVD's boolean parameters are VALUELESS flags —
+            # "hasKev=true" returns HTTP 404, which was swallowed and surfaced as
+            # "no KEV CVEs in this window" for every query.
             if kev_only:
-                params["hasKev"] = "true"
+                params["hasKev"] = ""
 
             try:
                 headers = {**(settings.nvd_headers or {})}
@@ -488,6 +495,26 @@ class RecentService:
                 if is_programming_error(exc) or isinstance(exc, OfflineError):
                     raise
                 logger.debug("EPSS lookup failed for %s: %s", cve.id, exc)
+        return cves
+
+    def _enrich_kev(self, cves: list[CVEInfo]) -> list[CVEInfo]:
+        """Populate ``kev_status`` from the cached CISA KEV catalogue.
+
+        NVD's response carries no KEV flag, so this was hardcoded ``False`` on
+        every result — meaning ``kev_status`` in the documented response shape
+        was always wrong, including for CVEs the ``check_kev_status`` tool
+        reports as KEV in the same process.
+
+        Backed by one cached catalogue download shared across every lookup, so
+        enriching a 50-CVE page costs one fetch rather than 50.
+        """
+        for cve in cves:
+            try:
+                cve.kev_status = self._cveorg.is_kev(cve.id)[0]
+            except Exception as exc:  # pragma: no cover - defensive
+                if is_programming_error(exc) or isinstance(exc, OfflineError):
+                    raise
+                logger.debug("KEV lookup failed for %s: %s", cve.id, exc)
         return cves
 
     @staticmethod

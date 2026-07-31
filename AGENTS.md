@@ -122,6 +122,11 @@ GitHub-repo metadata and these sources are not GitHub repos.
 bounds how many entries *of that source* are considered). They are independent — a CVE
 having a Metasploit module no longer suppresses its ExploitDB entry or Nuclei template.
 
+**A zero `total_count` is not always "no PoCs".** Per-source health rides in
+`sources[]`. If an entry reads `{"status": "rate_limited", ...}`, the count is *unknown*,
+not zero — pocmap could not enrich the results, so report it as "could not check" rather
+than "none found". Always read `sources[]` before concluding a CVE has no public PoC.
+
 **`find_github_pocs` and `limit`:** the limit is applied *before* per-repository metadata
 enrichment, which costs one GitHub API call each against an unauthenticated budget of 60
 per hour. Request only as many PoCs as you will actually use; a large `limit` on a
@@ -130,9 +135,14 @@ popular CVE is the fastest way to a `rate_limited` envelope.
 Results are the union of the Nomi-sec and TrickestCVE indexes, deduped, with
 CVE-aggregator repos filtered out. **Trust the order.** Nomi-sec only indexes repos that
 name the CVE and carries real star counts, so its entries rank first; TrickestCVE is
-broader but includes repos that merely *mention* a CVE, and those sort last with
-`stars: 0` and `language: null`. Prefer the top of the list, and treat a zero-star,
-null-language entry as an unverified lead rather than a known PoC.
+broader but includes repos that merely *mention* a CVE, and those sort last with `stars: 0`.
+
+`language` has **two** unknown forms and an agent must handle both: JSON `null` for an
+entry that was never enriched (enrichment is capped by `limit` to protect the GitHub
+budget), and the **string** `"N/A"` when the repo was enriched but GitHub reports no
+language. Testing only `language is None` misses half the cases. Prefer the top of the
+list, and treat a zero-star entry with either unknown form as an unverified lead rather
+than a known PoC.
 
 **Verifying a PoC is real:** `find_github_pocs` returns *leads*. When it matters that a
 repository actually exploits the CVE — before telling a user "working exploit code
@@ -233,13 +243,12 @@ manager -> package; deployed as a product -> product.
   "references": {"NVD": "https://nvd.nist.gov/...", "Advisory": "https://..."},
   "vendor": "Apache",
   "product": "Log4j",
-  "publication_date": "2021-12-10",
+  "publication_date": "10 Dec 2021",
   "state": "PUBLISHED",
   "ransomware_usage": null,
   "rejected_reason": null,
   "affected_products": [
-    {"vendor": "apache", "product": "log4j"},
-    {"vendor": "fedoraproject", "product": "fedora"}
+    {"vendor": "Apache Software Foundation", "product": "Apache Log4j2"}
   ]
 }
 ```
@@ -249,9 +258,16 @@ against several `(vendor, product)` pairs — the vulnerable component plus ever
 distribution that shipped it. When answering "does this CVE affect *X*?", check the whole
 `affected_products` list, not the scalar fields.
 
-The Python API additionally exposes `affected_cpes` (raw CPE 2.3 strings) and
+**Field-name and format notes.** `publication_date` is a display string
+(`"10 Dec 2021"`), not an ISO date — only `find_recent_exploits`, which returns a raw model
+dump, carries NVD's ISO-8601 timestamp. `vendor`/`product`/`affected_products` use the
+**CNA's own wording** (`"Apache Software Foundation"`, `"Apache Log4j2"`), not the lowercase
+CPE slug; pocmap only falls back to NVD's CPE pairs when the CNA filed placeholders.
+
+The Python API additionally exposes `affected_cpes` (raw CPE 2.3 strings),
 `cpe_matches` (applicability statements with `version_start_including` /
-`version_end_excluding` bounds) on `CVEInfo`. The MCP normalizer drops both, so they are
+`version_end_excluding` bounds), `ransomware_usage` and `rejected_reason` on `CVEInfo`.
+The MCP normalizer drops all four, so they are
 absent from `lookup_cve` and `discover_product_cves` — the one exception is
 `find_recent_exploits`, whose nested `cve_info` is a raw model dump and does carry them.
 To reason about version applicability, use `discover_product_cves`, which evaluates it for you.
@@ -388,8 +404,11 @@ Response: Summary table of CVEs with CVSS, EPSS, KEV, and patch priority
 User: "I'm hunting on a program using Apache Log4j. What should I check?"
 
 Agent steps:
-1. cpe_to_cve("cpe:2.3:a:apache:log4j")
-   -> All Log4j CVE ids
+1. cpe_to_cve("cpe:2.3:a:apache:log4j:2.0")
+   -> Log4j CVE ids. NVD matches on cpeName, which needs a VERSION component:
+      a bare "cpe:2.3:a:apache:log4j" returns total_count: 0, which is
+      indistinguishable from "this product has no CVEs". Use
+      discover_product_cves when you do not know the version.
 
 2. generate_json_report("<comma-joined ids, highest-value first>")
    -> Full details, exploit techniques, past bug bounty findings and practice
@@ -462,8 +481,11 @@ Agent steps (2 calls total, not 1 + 7-per-CVE):
       reports for the whole set, in one call. Covers what the old steps 2-4
       did with seven calls per CVE.
 
-Prioritize on cve_info.epss_score (0.0-1.0) + kev_status + CVSS, and use
-len(entries[].exploits) as the exploit-availability signal.
+Prioritize on epss_score (0.0-1.0) + kev_status + CVSS. NOTE: the tier entries are
+FLAT — id/description/cvss/epss_score/kev_status are top-level keys on each item, with
+no `cve_info` wrapper. That wrapper exists only in `find_recent_exploits` and
+`generate_json_report`. Use len(entries[].exploits) from step 2 as the
+exploit-availability signal.
 
 Response: Summary table of confirmed CVEs with CVSS, EPSS, KEV, exploit count, and prioritized remediation order
 ```
@@ -509,7 +531,7 @@ All MCP tools return JSON error objects with these fields:
 | `network_error` + `retryable: true` | Temporary API failure | Retry the call after a brief pause (2-5 seconds) |
 | `network_error` + `retryable: false` | Persistent connectivity issue | Report to user, suggest checking connection |
 | `not_found` | CVE doesn't exist in database | Inform user the CVE may not be published yet |
-| `invalid_input` | Malformed CVE ID or bad parameter | Correct the input (e.g., `CVE-2021-44228` not `CVE202144228`) |
+| `invalid_input` | Malformed CVE ID or CPE | Correct the input (e.g., `CVE-2021-44228` not `CVE202144228`). **Every** tool taking `cve_id`/`cpe` validates before doing any work, so a typo is always an error envelope — never `kev_status: false`, `available: false` or an empty `cve_ids` list. |
 | `permission_error` | Auth failure or forbidden access | Suggest checking GITHUB_API_TOKEN / NVD_API_KEY validity |
 | `not_enabled` + `retryable: false` | An opt-in capability is switched off (currently only `verify_github_pocs`) | Relay the `remediation` field to the user and stop; do not retry until they confirm they enabled it |
 | `unknown` | Unexpected error | Log details and try alternative tool |
@@ -591,6 +613,10 @@ Find recently published CVEs with exploit and PoC intelligence. Scans the NVD fo
   ]
 }
 ```
+
+`kev_status` and `epss` are enriched from the CISA KEV and EPSS bulk feeds (NVD serves
+neither), so `kev_only` and `sort="epss"` operate on real values. Before 2.6.7 both were
+hardcoded empty, which made `kev_only=true` return nothing at all.
 
 **The CVE fields are nested under `cve_info`** — nothing is hoisted to the item's top level.
 This is also the one tool that returns the **raw** `CVEInfo` dump rather than the normalized
@@ -771,7 +797,7 @@ paths = export_schemas("./schemas")
 | `CPEInfo.json` | CPEInfo | `cpe_string`, `vendor`, `product`, `version` |
 | `RecentExploitResult.json` | RecentExploitResult | `cve_info`, `has_poc`, `poc_sources` (enum list), `discovered_at` |
 | `ReportEntry.json` | ReportEntry | `cve_info`, `exploits`, `labs`, `bb_reports`, `generated_at` |
-| `MultiReport.json` | MultiReport | `entries` (dict of CVE ID -> ReportEntry), `generated_at` |
+| `MultiReport.json` | MultiReport | `entries` (dict of CVE ID -> ReportEntry), `generated_at`. **Python-model shape only** — the `generate_json_report` MCP tool returns `entries` as a LIST, plus `total_requested`/`total_entries`/`total_errors`/`errors[]`. |
 | `VersionConstraint.json` | VersionConstraint | `major`, `minor`, `patch`, `range_op`, `raw`, `is_wildcard` |
 | `ProductDiscoveryResult.json` | ProductDiscoveryResult | `query`, `normalized_vendor`, `normalized_product`, `version_constraint`, `confirmed_affected`, `possibly_affected`, `not_enough_data`, `total_found`, `search_sources`, `matched_cpes` |
 | `PackageVulnerability.json` | PackageVulnerability | `id`, `aliases`, `cve_ids`, `summary`, `severity`, `cvss_score`, `cvss_vector`, `fixed_versions`, `introduced_versions`, `epss`, `kev_status`, `withdrawn`, `url` |

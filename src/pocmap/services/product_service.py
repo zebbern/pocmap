@@ -19,6 +19,7 @@ import re
 from typing import Any
 
 from pocmap.clients.cpe_client import CPEDictionaryClient
+from pocmap.clients.cveorg_client import CVEOrgClient
 from pocmap.clients.nvd_client import NVDClient
 from pocmap.config import NVD_API_BASE, settings
 from pocmap.data.product_aliases import PRODUCT_ALIASES, VENDOR_PRODUCT_MAP
@@ -124,6 +125,8 @@ class ProductDiscoveryService:
         self._client = http_client or HTTPClient(headers=settings.nvd_headers)
         self._nvd_client = NVDClient(http_client=self._client)
         self._cpe_client = CPEDictionaryClient(http_client=self._client)
+        # Bulk EPSS / CISA KEV feeds — cached downloads, not per-CVE calls.
+        self._cveorg = CVEOrgClient(http_client=self._client)
 
     # -- Public API --
 
@@ -182,6 +185,13 @@ class ProductDiscoveryService:
             sources = ["nvd_keyword_search"]
             matched_cpes = []
 
+        # NVD returns neither EPSS nor KEV. AGENTS.md tells agents these entries
+        # "already carry full details (CVSS, EPSS, KEV, description) — there is
+        # no need to lookup_cve them again", so leaving them unset made the
+        # documented prioritization (EPSS + KEV + CVSS) rank everything equally.
+        # Two cached bulk feeds for the whole result set, not a call per CVE.
+        self._enrich_epss_kev(candidate_cves)
+
         # Step 4: Categorize
         result = self.match_cves_to_product(
             candidate_cves,
@@ -198,6 +208,26 @@ class ProductDiscoveryService:
         result.matched_cpes = matched_cpes
 
         return result
+
+    def _enrich_epss_kev(self, cves: list[CVEInfo]) -> None:
+        """Populate ``epss`` and ``kev_status`` in place from the bulk feeds.
+
+        Both are backed by a single cached catalogue shared across lookups, so
+        enriching N CVEs costs two downloads rather than 2N requests. Failures
+        degrade per-CVE: partial enrichment beats failing a discovery that
+        otherwise succeeded.
+        """
+        for cve in cves:
+            try:
+                if cve.epss is None:
+                    cve.epss = self._cveorg.get_epss(cve.id)
+                cve.kev_status = self._cveorg.is_kev(cve.id)[0]
+            except (OfflineError, RateLimitError):
+                raise
+            except Exception as exc:  # pragma: no cover - defensive
+                if is_programming_error(exc):
+                    raise
+                logger.debug("EPSS/KEV enrichment failed for %s: %s", cve.id, exc)
 
     def _resolve_cpe_pairs(
         self, keyword: str, vendor_hint: str | None

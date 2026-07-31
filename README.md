@@ -1,6 +1,6 @@
 # PocMap
 
-[![Version](https://img.shields.io/badge/version-2.6.6-blue.svg)](https://github.com/zebbern/pocmap)
+[![Version](https://img.shields.io/badge/version-2.6.7-blue.svg)](https://github.com/zebbern/pocmap)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Pydantic](https://img.shields.io/badge/pydantic-v2-purple.svg)](https://docs.pydantic.dev/)
