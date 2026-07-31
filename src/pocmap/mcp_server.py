@@ -22,15 +22,15 @@ import html
 import json
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, cast
 from urllib.parse import urlparse
 
-from mcp.server.lowlevel.server import CacheHint
+from mcp.server.lowlevel.server import CacheHint  # type: ignore[attr-defined]
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
@@ -358,7 +358,7 @@ class ServiceAdapter:
         having opted in, which the agent must report rather than read as
         "no PoCs could be verified".
         """
-        return self._exploit.verify_github_pocs(cve_id, limit=limit)
+        return cast("list[dict[str, Any]]", self._exploit.verify_github_pocs(cve_id, limit=limit))
 
     def get_attack_techniques(self, cve_id: str) -> dict[str, Any]:
         """Curated MITRE ATT&CK techniques for a CVE, split by mapping type."""
@@ -457,7 +457,7 @@ class ServiceAdapter:
             labs = self._lab.find_labs(cve_id)
             for lab in labs:
                 if lab.platform == LabPlatform.VULHUB:
-                    return lab.url
+                    return cast("str | None", lab.url)
             return None
         except Exception as e:
             if is_programming_error(e):
@@ -482,7 +482,7 @@ class ServiceAdapter:
     def cpe_to_cve(self, cpe: str) -> list[str]:
         """Convert CPE to CVEs."""
         try:
-            return self._cve.cpe_to_cves(cpe)
+            return cast("list[str]", self._cve.cpe_to_cves(cpe))
         except Exception as e:
             if is_programming_error(e):
                 raise
@@ -561,13 +561,13 @@ class ServiceAdapter:
 
     # -- Report Generation --
 
-    def generate_json_report(self, cve_ids: list[str]) -> str:
+    def generate_json_report(self, cve_ids: list[str]) -> dict[str, Any]:
         """Generate JSON report for CVE IDs."""
         if len(cve_ids) > MAX_CVE_BULK:
-            return json.dumps({
+            return {
                 "error": f"Too many CVEs requested: {len(cve_ids)} (max {MAX_CVE_BULK})",
                 "category": "invalid_input",
-            })
+            }
         entries: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
         for cve_id in cve_ids:
@@ -603,15 +603,15 @@ class ServiceAdapter:
             "entries": entries,
             "errors": errors,
         }
-        return json.dumps(report, indent=2, default=str)
+        return report
 
-    def generate_html_report(self, cve_ids: list[str]) -> str:
+    def generate_html_report(self, cve_ids: list[str]) -> dict[str, Any]:
         """Generate HTML report for CVE IDs."""
         if len(cve_ids) > MAX_CVE_BULK:
-            return json.dumps({
+            return {
                 "error": f"Too many CVEs requested: {len(cve_ids)} (max {MAX_CVE_BULK})",
                 "category": "invalid_input",
-            })
+            }
         now = datetime.now(timezone.utc)
 
         # Gather all data
@@ -643,9 +643,12 @@ class ServiceAdapter:
             })
 
         html_output = _build_html_report(entries, errors, cve_ids, now)
-        return json.dumps(
-            {"format": "html", "content": html_output, "cve_count": len(cve_ids), "status": "ok"}
-        )
+        return {
+            "format": "html",
+            "content": html_output,
+            "cve_count": len(cve_ids),
+            "status": "ok",
+        }
 
     # -- Product Discovery --
 
@@ -783,7 +786,7 @@ class ServiceAdapter:
         if value is None:
             return default
         if isinstance(value, Enum):
-            return value.value
+            return cast("str", value.value)
         return str(value)
 
     @staticmethod
@@ -906,9 +909,9 @@ class ServiceAdapter:
     def _normalize_recent_result(r: Any) -> dict[str, Any]:
         """Convert a RecentExploitResult to a JSON-serializable dict."""
         if hasattr(r, "model_dump"):
-            return r.model_dump(mode="json")
+            return cast("dict[str, Any]", r.model_dump(mode="json"))
         if hasattr(r, "to_dict"):
-            return r.to_dict()
+            return cast("dict[str, Any]", r.to_dict())
         if isinstance(r, dict):
             return r
         return dict(r)
@@ -1050,9 +1053,14 @@ _WRITES_TO_DISK = ToolAnnotations(
 )
 
 
+# Preserves each tool function's own signature through the decorator; without
+# it mypy sees an untyped decorator and erases all 22 tools to ``Any``.
+_ToolFn = TypeVar("_ToolFn", bound=Callable[..., Any])
+
+
 def _tool(
     *, name: str, description: str, annotations: ToolAnnotations = _READ_ONLY
-) -> Any:
+) -> Callable[[_ToolFn], _ToolFn]:
     """Register a tool with pocmap's house defaults.
 
     Structured output is left on. Every tool returns ``dict[str, Any]``, so the
@@ -1070,11 +1078,10 @@ def _tool(
     nested payloads for callers who want them, and ``AGENTS.md`` documents each
     tool's keys; neither costs the error envelope its honesty.
     """
-    return mcp.tool(
-        name=name,
-        description=description,
-        annotations=annotations,
+    decorator: Callable[[_ToolFn], _ToolFn] = mcp.tool(
+        name=name, description=description, annotations=annotations
     )
+    return decorator
 
 
 # ===========================================================================
@@ -1983,9 +1990,7 @@ def generate_html_report(cve_ids: str) -> dict[str, Any]:
                 "category": "invalid_input",
                 "hint": "Provide one or more comma-separated CVE IDs, e.g. 'CVE-2021-44228,CVE-2023-44487'",
             })
-        result = _svc.generate_html_report(ids)
-        # ServiceAdapter always returns JSON (either error or success envelope)
-        return result
+        return _svc.generate_html_report(ids)
     except Exception as e:
         return _tool_error(e, f"generate_html_report({cve_ids})")
 
@@ -2233,7 +2238,10 @@ def get_exploits_resource(cve_id: str) -> str:
 def get_report_resource(cve_id: str) -> str:
     """Resource: Full vulnerability report. URI template: report://{cve_id}"""
     try:
-        return _svc.generate_json_report([cve_id.upper().strip()])
+        # Resources are text, unlike tools — serialize the adapter's object.
+        return json.dumps(
+            _svc.generate_json_report([cve_id.upper().strip()]), indent=2, default=str
+        )
     except Exception as e:
         return json.dumps({"error": f"Report generation failed ({type(e).__name__})"})
 
@@ -2388,7 +2396,7 @@ Search for bug bounty reports on {cve_id.upper().strip()} and provide a comprehe
 # Main entry point
 # ===========================================================================
 
-def main():
+def main() -> None:
     """Run the MCP server with the specified transport."""
     parser = argparse.ArgumentParser(
         description="PocMap AI MCP Server",
@@ -2439,8 +2447,10 @@ Examples:
     if transport == "stdio":
         # STDIO has no bind address; passing host/port would be a TypeError.
         mcp.run(transport="stdio")
+    elif transport == "sse":
+        mcp.run(transport="sse", host=args.host, port=args.port)
     else:
-        mcp.run(transport=transport, host=args.host, port=args.port)
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

@@ -478,8 +478,22 @@ def _render_diff(diff: SnapshotDiff, fmt: OutputFormat, *, label: str) -> None:
 
 
 def _fmt_epss(value: float | None) -> str:
-    """Format an EPSS score for a table cell (or ``-`` when unknown)."""
-    return f"{value:.1f}" if value is not None else "-"
+    """Format an EPSS score (0-100) for a table cell, or ``-`` when unknown.
+
+    Never rounds *across* either endpoint. Plain ``:.1f`` renders 99.99 as
+    "100.0" and 0.004 as "0.0" — in a security tool those read as "certain to
+    be exploited" and "will not be exploited", and EPSS said neither. Only a
+    genuine 100 prints as 100.0, and any nonzero probability stays visibly
+    nonzero.
+    """
+    if value is None:
+        return "-"
+    text = f"{value:.1f}"
+    if text == "100.0" and value < 100:
+        return "99.9"
+    if text == "0.0" and value > 0:
+        return "<0.1"
+    return text
 
 
 def _compute_diff(

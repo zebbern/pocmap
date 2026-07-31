@@ -261,3 +261,34 @@ def test_table_json_only_commands_reject_other_formats(argv: list[str]) -> None:
 
 if __name__ == "__main__":  # pragma: no cover - convenience direct runner
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------------------------------------------
+# EPSS display never rounds across an endpoint
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, "-"),
+        (0.0, "0.0"),        # genuine zero stays zero
+        (0.004, "<0.1"),     # nonzero must not read as "will not be exploited"
+        (0.04, "<0.1"),
+        (0.05, "0.1"),
+        (12.34, "12.3"),
+        (97.53, "97.5"),
+        (99.9, "99.9"),
+        (99.96, "99.9"),     # the real bug: EPSS 99.96 is not certainty
+        (99.999, "99.9"),
+        (100.0, "100.0"),    # a genuine 100 is still allowed to say 100
+    ],
+)
+def test_fmt_epss_never_rounds_across_an_endpoint(value: float | None, expected: str) -> None:
+    """Rounding 99.99 to "100.0" claims certainty EPSS never expressed.
+
+    EPSS tops out at 0.99999 (=99.999 on the 0-100 scale), so a printed
+    "100.0" that came from rounding is always a lie about the model's output.
+    """
+    from pocmap.cli import _fmt_epss
+
+    assert _fmt_epss(value) == expected

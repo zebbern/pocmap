@@ -133,11 +133,6 @@ check_untyped_defs = true
 module = ["markdown", "tomli", "tomllib", "mcp.*"]
 ignore_missing_imports = true
 
-# FastMCP presentation layer — kept out of strict mypy until typed incrementally.
-[[tool.mypy.overrides]]
-module = ["pocmap.mcp_server"]
-ignore_errors = true
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

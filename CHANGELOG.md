@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-07-31
+
+### Fixed
+
+- **`generate_json_report` and `generate_html_report` failed on every call in 2.6.0.**
+  The 2.6.0 structured-content change annotated all 22 tools `-> dict[str, Any]`, but
+  these two still returned a JSON *string* from their `ServiceAdapter` methods. The SDK
+  validates a tool's return against the schema derived from its annotation, so both
+  raised `ToolError: Input should be a valid dictionary` before doing any work —
+  including `generate_json_report`, which `AGENTS.md` documents as the primary entry
+  point ("one call instead of seven"). Both adapters now return the object.
+- The `report://{cve_id}` resource serializes that object again, since MCP resources
+  are text where tools are structured.
+- `_fmt_epss` no longer rounds across either endpoint. `:.1f` rendered EPSS 99.99 as
+  `100.0` and 0.004 as `0.0` — in a security tool those read as "certain to be
+  exploited" and "will not be exploited", and EPSS (which tops out at 99.999) said
+  neither. Now `99.9` and `<0.1`; a genuine 100 still prints `100.0`.
+
+### Changed
+
+- `pocmap.mcp_server` is no longer exempt from `mypy --strict`. The exemption is what
+  let the report-tool defect ship: 34 errors were hidden, two of them real return-type
+  mismatches. All 53 source files now type-check.
+- New `tests/test_mcp_tool_contract.py` calls **every** registered tool through
+  `mcp.call_tool` — the real SDK path that validates returns — and asserts each yields
+  a dict under an object schema. A tool added without a case here fails the suite.
+
 ## [2.6.0] - 2026-07-31
 
 ### Changed
