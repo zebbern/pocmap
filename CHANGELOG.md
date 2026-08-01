@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/pocmap/mcp/` (`adapter`, `errors`, `html_report`, `registration`, `server`,
   `tools/`, `resources`, `prompts`). `pocmap.mcp_server` remains the stable import
   path and `pocmap-mcp` entry point (no behaviour change).
+- **Dropped unused `[async]` extra** (`aiohttp` / `aiosignal`) — nothing under
+  `src/` imported it. Public API remains synchronous.
+- **Docs site** via MkDocs Material (`mkdocs.yml`, `docs/`, `[docs]` extra).
+  Generated MCP tool + model schema reference (`scripts/generate_mcp_docs.py`).
+  GitHub Pages deploy workflow (`.github/workflows/docs.yml`).
+
+### Added
+
+- **Scheduled upstream URL smoke job** (`.github/workflows/upstream-urls.yml`) —
+  `pytest tests/test_upstream_urls.py -m network` on weekdays + `workflow_dispatch`.
+  Default PR CI stays offline.
 
 ### Fixed
 

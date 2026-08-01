@@ -26,7 +26,8 @@ Defaulting to internal knowledge often leads to outdated implementations. For ex
 
 ## Commands
 - Install (PyPI): `pip install "pocmap[server]"` (omit `[server]` for CLI-only)
-- Install (dev clone): `pip install -e ".[server,dev]"` (pytest, mypy, ruff + the MCP SDK)
+- Install (dev clone): `pip install -e ".[server,dev]"` (pytest, mypy, ruff + the MCP SDK);
+  docs site: `pip install -e ".[docs]"` then `python scripts/generate_mcp_docs.py && mkdocs build --strict`
 - Run CLI: `pocmap lookup CVE-2021-44228`  (or `python -m pocmap ...`); full command list: `python -m pocmap --help`
 - Lint: `ruff check src/pocmap`
 - Type check: `mypy src/pocmap`   (strict mode is on in `pyproject.toml`; `pocmap.mcp_server` is excluded)

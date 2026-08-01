@@ -39,28 +39,20 @@ cannot answer).
 
 ---
 
-## Open
+## Done (this branch)
 
 ### `MCP-SPLIT` — modularize `src/pocmap/mcp_server.py`
-- **Why:** Maintainability of the differentiator. It is a single ~100 KB file holding all 22
-  tools, and it is exactly where the 2.6.0 report-tool regression hid.
-- **Scope:** Split into a package (`mcp/tools/`, `mcp/resources.py`, `mcp/prompts.py`,
-  `mcp/errors.py`, `mcp/adapter.py`) behind the same `pocmap-mcp` entry point. No behaviour
-  change. Note the implementation now lives in `src/pocmap/`; repo-root `mcp_server.py` is
-  only a launcher shim.
-- **Acceptance (offline):** `tests/test_mcp_tool_contract.py` already pins the full tool
-  inventory and every tool's return contract through `mcp.call_tool` — it must stay green
-  across the refactor, unchanged. `ruff` / `mypy --strict` clean.
-- **Effort:** L · **Risk:** Med (churn; the contract test is the mitigation).
+Shipped: implementation under `src/pocmap/mcp/`; `pocmap.mcp_server` facade unchanged for
+imports and `pocmap-mcp`.
 
 ### `DOCS-SITE` — hosted docs + versioned reference
-- **Why:** A searchable, linkable site beats one long README for discoverability, and gives
-  agent users a stable URL for the tool table and JSON schemas.
-- **Scope:** `mkdocs-material` generated from README/AGENTS content, plus an auto-generated
-  MCP tool reference and schema pages; GitHub Pages deploy.
-- **Acceptance:** `mkdocs build --strict` passes with no broken links.
-  **[needs-user]:** enabling Pages for the repo.
-- **Effort:** M · **Risk:** Low.
+Shipped: MkDocs Material + generated MCP/schema reference + docs workflow.
+**[needs-user]:** enable GitHub Pages for the repo (Settings → Pages → `gh-pages`).
+
+### Upstream URL smoke CI
+Shipped: `.github/workflows/upstream-urls.yml` (schedule + workflow_dispatch).
+
+## Open
 
 ### `TUI` — interactive triage (`pocmap tui`)
 - **Why:** Keyboard-driven triage (browse `latest`, drill into a CVE, open PoCs)

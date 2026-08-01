@@ -12,7 +12,7 @@ AI-agent-optimized CVE exploit discovery toolkit for bug bounty hunters and secu
 - **Multi-Source Discovery**: Queries GitHub, Exploit-DB, Metasploit, Nuclei, CTF labs, and bug bounty platforms simultaneously
 - **Structured Pydantic Models**: All data validated and serialized with full type safety and JSON Schema support
 - **MCP Server Integration**: 22 AI-native tools via Model Context Protocol for Claude Desktop, Cursor, and other AI agents
-- **Bug Bounty Toolkit**: Complete hunter toolkit with checklists, workflows, report templates, prioritization engine, and scope management
+- **Bug Bounty Toolkit**: Python-API hunter toolkit (checklists, workflows, report templates, prioritization, scope/automation); CLI `bugbounty` searches write-ups only
 - **Rich CLI**: 13 commands with colorized tables, progress bars, and bulk processing
 - **Composable Output**: `table`, `json`, `csv`, `md`, and `sarif` output on read commands, plus a stable [exit-code contract](#output-formats--exit-codes) for scripting and CI
 - **CI Security Gate**: `bulk --fail-on kev|critical|high|epss>=N` fails the build on policy matches and emits SARIF 2.1.0 for GitHub code scanning
@@ -246,7 +246,9 @@ paths = export_schemas("./schemas")
 
 ## Bug Bounty Toolkit
 
-The `pocmap.bugbounty` module provides a comprehensive toolkit for bug bounty hunters:
+The `pocmap.bugbounty` module provides a comprehensive toolkit for bug bounty hunters.
+These helpers are a **Python API** (and packaged playbooks) — the CLI only exposes
+`pocmap bugbounty <CVE>` for write-up search, not checklists/workflows/scope commands:
 
 ### Structured Checklists
 

@@ -1,0 +1,82 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "scripts/generate_mcp_docs.py"
+      - "src/pocmap/mcp/**"
+      - "src/pocmap/mcp_server.py"
+      - "src/pocmap/models.py"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "scripts/generate_mcp_docs.py"
+      - "src/pocmap/mcp/**"
+      - "src/pocmap/mcp_server.py"
+      - "src/pocmap/models.py"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: mkdocs build --strict
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install docs + server extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[server,docs]"
+
+      - name: Regenerate MCP reference pages
+        run: python scripts/generate_mcp_docs.py
+
+      - name: Build site (strict)
+        run: mkdocs build --strict
+
+  deploy:
+    name: Deploy GitHub Pages
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Configure Git Credentials
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Install docs + server extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[server,docs]"
+
+      - name: Regenerate MCP reference pages
+        run: python scripts/generate_mcp_docs.py
+
+      - name: Deploy with mkdocs gh-deploy
+        # Requires GitHub Pages enabled for this repo (Settings → Pages →
+        # Deploy from branch ``gh-pages``, or allow Actions to create it).
+        run: mkdocs gh-deploy --force --strict
