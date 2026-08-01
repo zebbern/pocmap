@@ -51,9 +51,10 @@ pocmap-mcp --transport sse --host 127.0.0.1 --port 8000
 pocmap-mcp --transport http --port 9000
 ```
 
-**Default entry tool for known CVE IDs:** `generate_json_report` — one call returns
-CVE details, exploits (all registered sources), labs, bug bounty reports, and a
-per-source `sources` health block.
+**Tool routing:** PoC / exploit-repos only: use `find_github_pocs` (or Metasploit /
+ExploitDB / Nuclei). Full assessment (severity, KEV/EPSS, all exploit sources,
+labs, bounty): use `generate_json_report` — one call with a per-source `sources`
+health block.
 
 Agent consumption guide (return shapes, EPSS scales, error envelopes):
 [`.claude/skills/pocmap-agent/references/mcp_tools.md`](https://github.com/zebbern/pocmap/blob/main/.claude/skills/pocmap-agent/references/mcp_tools.md)
