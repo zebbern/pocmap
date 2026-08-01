@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-08-01
+
+MCP package split, honest report/`sources` paths, GitHub PoC Search fallback for index-lag
+CVEs, MkDocs site + upstream URL smoke CI, and clearer PoC-vs-full-assessment tool routing.
+
 ### Changed
 
 - **MCP routing copy:** server `instructions` and tool descriptions now send PoC-only
@@ -827,7 +832,8 @@ causes. **`discover` results will shift between confidence tiers** — see *Chan
 - CVE/PoC/exploit-discovery toolkit: a Typer CLI, a FastMCP server exposing 19 tools,
   a synchronous Python API, and the bug-bounty toolkit (checklists, playbooks, scoring).
 
-[Unreleased]: https://github.com/zebbern/pocmap/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/zebbern/pocmap/compare/v2.7.0...HEAD
+[2.7.0]: https://github.com/zebbern/pocmap/compare/v2.6.7...v2.7.0
 [2.2.0]: https://github.com/zebbern/pocmap/releases/tag/v2.2.0
 [2.1.0]: https://github.com/zebbern/pocmap/releases/tag/v2.1.0
 [2.0.0]: https://github.com/zebbern/pocmap/releases/tag/v2.0.0
