@@ -539,6 +539,15 @@ def test_scope_monitor_fetch_returns_cve_dicts(
     assert rows[0]["product"] == "nginx"
 
 
+def test_scope_monitor_rejects_empty_scope() -> None:
+    """Empty scope must not look like 'no new CVEs' — fail before fetching."""
+    from pocmap.bugbounty.automation import ScopeMonitor
+
+    monitor = ScopeMonitor()
+    with pytest.raises(RuntimeError, match="no in-scope assets"):
+        monitor.check_new_cves(cve_source=lambda: [{"id": "CVE-2024-1", "cvss_score": 9.0}])
+
+
 def test_scope_monitor_alerts_on_model_dump_cvss_above_threshold() -> None:
     """RecentService feeds CVEInfo.model_dump(); nested cvss.base_score must alert.
 

@@ -464,6 +464,19 @@ high-impact CVEs are discovered that match the scope.
         """Set minimum CVSS score for alerts."""
         self.alert_threshold = min_cvss
 
+    def _require_in_scope(self) -> None:
+        """Fail loud when no in-scope assets are configured.
+
+        An empty alert list must mean "nothing matched", not "forgot to load
+        scope" — otherwise continuous monitoring silently never alerts.
+        """
+        summary = self.scope_manager.get_scope_summary()
+        if int(summary.get("in_scope", 0)) <= 0:
+            raise RuntimeError(
+                "ScopeMonitor has no in-scope assets; add programs/scope "
+                "(ScopeManager.add_program / import_scope) before monitoring"
+            )
+
     def load_known_cves(self, filepath: str) -> None:
         """Load previously known CVEs to avoid duplicate alerts."""
         safe_filepath = _safe_path(filepath)
@@ -492,7 +505,12 @@ high-impact CVEs are discovered that match the scope.
 
         Returns:
             List of new matching CVEs
+
+        Raises:
+            RuntimeError: If the scope manager has no in-scope assets, or if
+                the default CVE fetch fails.
         """
+        self._require_in_scope()
         self.last_check = datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
 
         # Fetch new CVEs
@@ -652,6 +670,7 @@ high-impact CVEs are discovered that match the scope.
         self.is_running = True
         interval_seconds = interval_hours * 3600
 
+        self._require_in_scope()
         print(f"Starting CVE monitoring (interval: {interval_hours}h)")
         print(f"Alert threshold: CVSS >= {self.alert_threshold}")
         print(f"Webhooks configured: {len(self.webhooks)}")
