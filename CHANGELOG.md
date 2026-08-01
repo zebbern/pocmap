@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that always returned `[]`, so scope matching never alerted. It now uses `RecentService`
   (`since=24h`) and raises on fetch failure instead of pretending there were no new CVEs.
   CVSS unwrapping also accepts `model_dump` dicts with `base_score`.
+- **`ScopeMonitor` rejects empty scope.** `check_new_cves` / `start_monitoring` raise if
+  there are no in-scope assets, so an empty alert list cannot mean "forgot to load scope".
 
 ### Documentation
 
