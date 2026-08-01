@@ -55,15 +55,13 @@ def find_recent_exploits(
         limit: Maximum number of results (1--100, default: 50).
 
     Returns:
-        JSON string with success (bool), total (int), query (the echoed
-        filter parameters), and cves -- a list of objects each shaped
-        {cve_info, has_poc, poc_sources, discovered_at}. The CVE fields
-        are nested under ``cve_info``, not hoisted to the top of each
-        item. Unlike ``lookup_cve``, ``cve_info`` here is the raw CVEInfo
-        model dump: ``cvss`` uses ``base_score`` (not ``score``), the
-        score is ``epss`` on the 0--100 scale (not ``epss_score`` on
-        0.0--1.0), ``references`` is a name->URL mapping (not a list),
-        and ``affected_cpes``/``cpe_matches`` are included.
+        Dict with success (bool), total (int), query (echoed filter
+        parameters), and cves -- a list of
+        {cve_info, has_poc, poc_sources, discovered_at}. CVE fields stay
+        nested under ``cve_info`` (not hoisted). ``cve_info`` uses the
+        same normalizer as ``lookup_cve``: ``cvss.score``, ``epss_score``
+        on 0.0--1.0, ``references`` as a list, plus ``affected_products``.
+        The ``min_epss`` *input* filter still uses the 0--100 scale.
     """
     try:
         limit = max(1, min(100, limit))
