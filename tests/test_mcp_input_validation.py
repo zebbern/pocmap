@@ -4,7 +4,7 @@ Only 3 of the 13 CVE-taking MCP tools validated their input. The other 10
 reported a typo as a *result*: ``check_kev_status("CVE202144228")`` returned
 ``kev_status: false`` — which an agent reads as "not actively exploited" — and
 ``cve_to_cpe`` / ``cpe_to_cve`` returned ``total_count: 0``, indistinguishable
-from a genuine empty answer. AGENTS.md documents ``invalid_input`` as the
+from a genuine empty answer. The MCP tool contract documents ``invalid_input`` as the
 contract for exactly this case.
 
 The guard lives in the shared ``_tool`` decorator, so a tool added later
@@ -84,7 +84,7 @@ def test_well_formed_cpe_is_not_rejected(good: str) -> None:
 
 
 def test_lowercase_cve_id_still_accepted() -> None:
-    """AGENTS.md documents `cve-2021-44228` as fine — normalized, not rejected."""
+    """Lowercase CVE IDs are fine — normalized, not rejected."""
     payload = _call("check_kev_status", {"cve_id": "cve-2021-44228"})
     assert payload.get("category") != "invalid_input"
     assert payload.get("cve_id") == "CVE-2021-44228"

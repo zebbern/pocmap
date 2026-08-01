@@ -52,8 +52,8 @@ def test_server_speaks_the_2026_07_28_protocol() -> None:
     assert version == __version__
 
 
-# The advertised tool count, repeated across README, AGENTS.md, mcp_config.json
-# and the pocmap-agent skill. Changing it means updating all of them.
+# The advertised tool count, repeated across README, mcp_config.json, and the
+# pocmap-agent skill (mcp_tools.md). Changing it means updating all of them.
 EXPECTED_TOOL_COUNT = 22
 
 
@@ -142,7 +142,7 @@ def test_verify_github_pocs_is_gated_and_says_how_to_enable() -> None:
 
 
 def test_malformed_cve_id_is_categorized_invalid_input() -> None:
-    """AGENTS.md promises ``invalid_input`` for a malformed CVE ID.
+    """The MCP tool contract promises ``invalid_input`` for a malformed CVE ID.
 
     Regression: ``ValidationError`` did not subclass ``ValueError``, so
     ``categorize_exception`` fell through to ``unknown`` — a documented-contract

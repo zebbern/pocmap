@@ -185,7 +185,7 @@ class ProductDiscoveryService:
             sources = ["nvd_keyword_search"]
             matched_cpes = []
 
-        # NVD returns neither EPSS nor KEV. AGENTS.md tells agents these entries
+        # NVD returns neither EPSS nor KEV. The agent skill tells agents these entries
         # "already carry full details (CVSS, EPSS, KEV, description) — there is
         # no need to lookup_cve them again", so leaving them unset made the
         # documented prioritization (EPSS + KEV + CVSS) rank everything equally.

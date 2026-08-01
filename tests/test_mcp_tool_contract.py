@@ -5,8 +5,8 @@ Regression for a 2.6.0 defect: ``generate_json_report`` and
 ``ServiceAdapter`` methods still returned a JSON *string*. The SDK validates a
 tool's return against the schema derived from its annotation, so both tools
 raised ``ToolError`` on **every** call — including ``generate_json_report``,
-which AGENTS.md documents as the primary entry point ("one call instead of
-seven"). Nothing caught it: ``pocmap.mcp_server`` was exempt from
+which the pocmap-agent skill documents as the primary entry point ("one call
+instead of seven"). Nothing caught it: ``pocmap.mcp_server`` was exempt from
 ``mypy --strict``, and no test invoked the tools through ``mcp.call_tool``.
 
 These tests run with the network hard-blocked, so most tools return an error

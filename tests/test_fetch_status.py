@@ -42,6 +42,17 @@ from pocmap.utils.http import (
     is_programming_error,
 )
 
+
+@pytest.fixture(autouse=True)
+def _no_cve_reference_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ERR-RESULT tests offline: stub CVE reference promotion."""
+    monkeypatch.setattr(
+        ExploitService,
+        "_pocs_from_cve_references",
+        lambda self, cve_id: [],
+    )
+
+
 CVE = "CVE-2021-44228"
 
 
@@ -431,3 +442,193 @@ def test_adapter_find_github_pocs_does_not_swallow_typeerror(monkeypatch) -> Non
     monkeypatch.setattr(adapter._exploit, "find_github_pocs", _bug)
     with pytest.raises(TypeError):
         adapter.find_github_pocs(CVE, limit=3)
+
+
+# ---------------------------------------------------------------------------
+# generate_json_report: sources block (no silent-empty exploits)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_json_report_includes_sources_and_uses_with_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report entries must expose per-source health; empty exploits ≠ silent miss."""
+    adapter = mcp_server.ServiceAdapter()
+    monkeypatch.setattr(
+        adapter,
+        "lookup_cve",
+        lambda cve_id: {
+            "id": cve_id,
+            "description": "test",
+            "cvss": {"version": "3.1", "score": 9.8, "severity": "CRITICAL", "vector_string": None},
+            "epss_score": 0.9,
+            "kev_status": True,
+            "cwes": [],
+            "references": [],
+            "vendor": "apache",
+            "product": "log4j",
+            "affected_products": [],
+            "publication_date": "2021-12-10",
+            "state": "PUBLISHED",
+        },
+    )
+    monkeypatch.setattr(adapter, "find_labs", lambda _cve: [])
+    monkeypatch.setattr(adapter, "find_bug_bounty_reports", lambda _cve: [])
+
+    statuses = [
+        SourceStatus(name="github", status=FetchStatus.RATE_LIMITED, count=0, retryable=True),
+        SourceStatus(name="db", status=FetchStatus.EMPTY, count=0),
+    ]
+    monkeypatch.setattr(
+        adapter._exploit,
+        "find_exploits_with_status",
+        lambda _cve: ExploitFindResult(exploits=[], sources=statuses),
+    )
+
+    report = adapter.generate_json_report([CVE])
+    assert report["total_entries"] == 1
+    entry = report["entries"][0]
+    assert entry["exploits"] == []
+    assert "sources" in entry
+    by_name = {s["source"]: s for s in entry["sources"]}
+    assert by_name["github"]["status"] == "rate_limited"
+    assert by_name["github"]["retryable"] is True
+    assert by_name["db"]["status"] == "empty"
+
+
+def test_scope_monitor_fetch_raises_instead_of_silent_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default ScopeMonitor path must not pretend 'no CVEs' when the fetch fails."""
+    from pocmap.bugbounty.automation import ScopeMonitor
+
+    class _BoomRecent:
+        def __enter__(self) -> _BoomRecent:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def find_recent_cves(self, **_kwargs: object) -> list[object]:
+            raise HTTPError("nvd down", status_code=503)
+
+    monkeypatch.setattr(
+        "pocmap.bugbounty.automation.RecentService",
+        lambda: _BoomRecent(),
+    )
+    with pytest.raises(RuntimeError, match="could not fetch recent CVEs"):
+        ScopeMonitor()._fetch_recent_cves()
+
+
+def test_scope_monitor_fetch_returns_cve_dicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pocmap.bugbounty.automation import ScopeMonitor
+    from pocmap.models import CVEInfo, RecentExploitResult
+
+    class _FakeRecent:
+        def __enter__(self) -> _FakeRecent:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def find_recent_cves(self, **_kwargs: object) -> list[RecentExploitResult]:
+            return [
+                RecentExploitResult(
+                    cve_info=CVEInfo(id="CVE-2024-0001", product="nginx", vendor="f5"),
+                )
+            ]
+
+    monkeypatch.setattr(
+        "pocmap.bugbounty.automation.RecentService",
+        lambda: _FakeRecent(),
+    )
+    rows = ScopeMonitor()._fetch_recent_cves()
+    assert len(rows) == 1
+    assert rows[0]["id"] == "CVE-2024-0001"
+    assert rows[0]["product"] == "nginx"
+
+
+def test_scope_monitor_rejects_empty_scope() -> None:
+    """Empty scope must not look like 'no new CVEs' — fail before fetching."""
+    from pocmap.bugbounty.automation import ScopeMonitor
+
+    monitor = ScopeMonitor()
+    with pytest.raises(RuntimeError, match="no in-scope assets"):
+        monitor.check_new_cves(cve_source=lambda: [{"id": "CVE-2024-1", "cvss_score": 9.0}])
+
+
+def test_scope_monitor_alerts_on_model_dump_cvss_above_threshold() -> None:
+    """RecentService feeds CVEInfo.model_dump(); nested cvss.base_score must alert.
+
+    Flat ``cvss_score`` fixtures give false confidence — the live path dumps
+    ``cvss: {"base_score": ...}``, and the threshold check needs that unwrapped.
+    """
+    from pocmap.bugbounty.automation import ScopeMonitor
+    from pocmap.bugbounty.scope_manager import ScopeManager
+    from pocmap.models import CVEInfo, CVSSScore, CVSSVersion, Severity
+
+    scope = ScopeManager()
+    scope.add_program("hackerone", "example", ["nginx.example.com"])
+    monitor = ScopeMonitor(scope)
+    monitor.set_alert_threshold(7.0)
+
+    dumped = CVEInfo(
+        id="CVE-2024-9999",
+        product="nginx",
+        vendor="f5",
+        cvss=CVSSScore(
+            version=CVSSVersion.V3_1,
+            base_score=9.8,
+            severity=Severity.CRITICAL,
+        ),
+    ).model_dump(mode="json")
+    assert isinstance(dumped["cvss"], dict)
+    assert dumped["cvss"]["base_score"] == 9.8
+
+    alerts = monitor.check_new_cves(cve_source=lambda: [dumped])
+    assert len(alerts) == 1
+    assert alerts[0]["id"] == "CVE-2024-9999"
+
+
+def test_generate_html_report_renders_source_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HTML must surface per-source health so empty exploits are not silent misses."""
+    adapter = mcp_server.ServiceAdapter()
+    monkeypatch.setattr(
+        adapter,
+        "lookup_cve",
+        lambda cve_id: {
+            "id": cve_id,
+            "description": "test",
+            "cvss": {"version": "3.1", "score": 9.8, "severity": "CRITICAL"},
+            "epss_score": 0.9,
+            "kev_status": True,
+            "cwes": [],
+            "references": [],
+            "vendor": "apache",
+            "product": "log4j",
+            "affected_products": [],
+            "publication_date": "2021-12-10",
+            "state": "PUBLISHED",
+        },
+    )
+    monkeypatch.setattr(adapter, "find_labs", lambda _cve: [])
+    monkeypatch.setattr(adapter, "find_bug_bounty_reports", lambda _cve: [])
+    statuses = [
+        SourceStatus(name="github", status=FetchStatus.RATE_LIMITED, count=0, retryable=True),
+        SourceStatus(name="db", status=FetchStatus.EMPTY, count=0),
+    ]
+    monkeypatch.setattr(
+        adapter._exploit,
+        "find_exploits_with_status",
+        lambda _cve: ExploitFindResult(exploits=[], sources=statuses),
+    )
+
+    report = adapter.generate_html_report([CVE])
+    html_out = report["content"]
+    assert "Source Status" in html_out
+    assert "github: rate_limited" in html_out
+    assert "db: empty" in html_out

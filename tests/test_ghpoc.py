@@ -55,6 +55,16 @@ def _fake_search(n: int) -> Callable[..., list[Exploit]]:
     return _search
 
 
+@pytest.fixture(autouse=True)
+def _no_cve_reference_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep FIX-GHPOC tests offline: stub CVE reference promotion."""
+    monkeypatch.setattr(
+        ExploitService,
+        "_pocs_from_cve_references",
+        lambda self, cve_id: [],
+    )
+
+
 def test_adapter_find_github_pocs_returns_normalized_dicts(monkeypatch):
     """ServiceAdapter.find_github_pocs(cve, limit=3) returns 3 dicts, not []."""
     adapter = mcp_server.ServiceAdapter()
@@ -143,3 +153,22 @@ def test_adapter_does_not_mask_populated_results(monkeypatch):
 
     assert len(result) == 4
     assert result[0]["url"].startswith("https://github.com/example/poc-")
+
+
+def test_find_github_merges_poc_like_cve_references(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reference-linked PoC repos appear even when curated indexes miss them."""
+    monkeypatch.setattr(ExploitService, "_pocs_from_cve_references", lambda self, cve_id: [
+        Exploit(
+            source=ExploitSource.GITHUB,
+            url=f"https://github.com/researcher/{cve_id}",
+            title=cve_id,
+            stars=0,
+        )
+    ])
+    svc = ExploitService()
+    monkeypatch.setattr(svc._github, "search_pocs", _fake_search(0))
+
+    result = svc.find_github_pocs(CVE, limit=10)
+
+    assert len(result) == 1
+    assert result[0].url == f"https://github.com/researcher/{CVE}"

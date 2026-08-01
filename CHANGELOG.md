@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **MCP routing copy:** server `instructions` and tool descriptions now send PoC-only
+  asks to `find_github_pocs` (or the matching DB tool) and reserve `generate_json_report`
+  for full assessments — agents should not open every CVE question with the heavy report.
+- **MCP server modularized into `pocmap.mcp`.** Implementation is under
+  `src/pocmap/mcp/` (`adapter`, `errors`, `html_report`, `registration`, `server`,
+  `tools/`, `resources`, `prompts`). `pocmap.mcp_server` remains the stable import
+  path and `pocmap-mcp` entry point (no behaviour change).
+- **Dropped unused `[async]` extra** (`aiohttp` / `aiosignal`) — nothing under
+  `src/` imported it. Public API remains synchronous.
+- **Docs site** via MkDocs Material (`mkdocs.yml`, `docs/`, `[docs]` extra).
+  Generated MCP tool + model schema reference (`scripts/generate_mcp_docs.py`).
+  GitHub Pages deploy workflow (`.github/workflows/docs.yml`).
+
+### Added
+
+- **Scheduled upstream URL smoke job** (`.github/workflows/upstream-urls.yml`) —
+  `pytest tests/test_upstream_urls.py -m network` on weekdays + `workflow_dispatch`.
+  Default PR CI stays offline.
+
+### Fixed
+
+- **GitHub PoC recall for index-lag CVEs.** When Nomi-sec and TrickestCVE both return no
+  candidates, `GitHubClient.search_pocs` falls back to GitHub Search
+  (`/search/repositories?q=<CVE>`). PoC-like CVE reference URLs (CVE id in the repo path,
+  or poc/exploit-named repos mentioning the CVE) are merged in
+  `ExploitService._find_github`. Rate limits still propagate as `rate_limited`, never as
+  empty.
+- **MCP reports no longer omit third-party exploit sources or hide fetch failures.**
+  `generate_json_report` / `generate_html_report` now collect exploits through
+  `ExploitService.find_exploits_with_status` (same aggregation as `ReportService`, plus
+  per-source `ok` / `empty` / `rate_limited` / `error`). Each entry includes a `sources`
+  block; the HTML report renders that status so an empty exploit list is never a silent
+  miss.
+- **`find_recent_exploits` `cve_info` matches `lookup_cve`.** Results go through
+  `_normalize_cve_info` (`cvss.score`, `epss_score` 0.0–1.0, `references` as a list) instead
+  of a raw model dump (`cvss.base_score`, `epss` 0–100).
+- **`ScopeMonitor` actually fetches recent CVEs.** `_fetch_recent_cves` used a placeholder
+  that always returned `[]`, so scope matching never alerted. It now uses `RecentService`
+  (`since=24h`) and raises on fetch failure instead of pretending there were no new CVEs.
+  CVSS unwrapping also accepts `model_dump` dicts with `base_score`.
+- **`ScopeMonitor` rejects empty scope.** `check_new_cves` / `start_monitoring` raise if
+  there are no in-scope assets, so an empty alert list cannot mean "forgot to load scope".
+
+### Documentation
+
+- **Agent MCP contract moved out of `AGENTS.md`.** `AGENTS.md` is general agent guidelines;
+  the canonical MCP/agent consumption guide is
+  `.claude/skills/pocmap-agent/references/mcp_tools.md` (skill overview in
+  `pocmap-agent/SKILL.md`). `CLAUDE.md`, README AI section, `add-mcp-tool`, and
+  `agent-docs-consistency` retargeted accordingly.
+- **`mcp_config.json` tool `output_schema` values corrected** from legacy "string" wording
+  to structured objects (matches real `structuredContent` since 2.6.0).
+
 ## [2.6.7] - 2026-07-31
 
 An audit that verified every AGENTS.md claim by actually invoking the tools. 14 discrepancies

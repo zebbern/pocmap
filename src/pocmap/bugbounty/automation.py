@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from pocmap.bugbounty.scope_manager import ScopeManager
+from pocmap.services.recent_service import RecentService
 from pocmap.utils.compat import get_value as _get_value
 from pocmap.utils.http import HTTPClient, is_safe_url
 
@@ -108,8 +109,8 @@ def _get_cve_value(obj: Any, key: str, default: Any = None) -> Any:
     models (e.g. ``id``, ``cvss``).
 
     For the ``cvss`` / ``cvss_score`` keys, nested
-    :class:`~pocmap.models.CVSSScore` models are automatically
-    unwrapped to return the scalar ``base_score``.
+    :class:`~pocmap.models.CVSSScore` models and ``model_dump`` dicts
+    with a ``base_score`` key are unwrapped to the scalar score.
     """
     if obj is None:
         return default
@@ -122,11 +123,15 @@ def _get_cve_value(obj: Any, key: str, default: Any = None) -> Any:
     if val is None or (callable(val) and attr_name != key):
         return default
 
-    # Unwrap nested CVSSScore -> base_score when the caller
-    # asked for a scalar cvss/cvss_score value.
+    # Unwrap nested CVSSScore / model_dump dict -> base_score when the
+    # caller asked for a scalar cvss/cvss_score value. RecentService path
+    # feeds CVEInfo.model_dump() where cvss is {"base_score": ...}.
     if attr_name == "cvss" and key in ("cvss", "cvss_score"):
         if val is not None and hasattr(val, "base_score"):
             return val.base_score
+        if isinstance(val, dict) and "base_score" in val:
+            score = val.get("base_score")
+            return score if score is not None else default
         return val if val is not None else default
 
     return val if val is not None else default
@@ -459,6 +464,19 @@ high-impact CVEs are discovered that match the scope.
         """Set minimum CVSS score for alerts."""
         self.alert_threshold = min_cvss
 
+    def _require_in_scope(self) -> None:
+        """Fail loud when no in-scope assets are configured.
+
+        An empty alert list must mean "nothing matched", not "forgot to load
+        scope" — otherwise continuous monitoring silently never alerts.
+        """
+        summary = self.scope_manager.get_scope_summary()
+        if int(summary.get("in_scope", 0)) <= 0:
+            raise RuntimeError(
+                "ScopeMonitor has no in-scope assets; add programs/scope "
+                "(ScopeManager.add_program / import_scope) before monitoring"
+            )
+
     def load_known_cves(self, filepath: str) -> None:
         """Load previously known CVEs to avoid duplicate alerts."""
         safe_filepath = _safe_path(filepath)
@@ -487,7 +505,12 @@ high-impact CVEs are discovered that match the scope.
 
         Returns:
             List of new matching CVEs
+
+        Raises:
+            RuntimeError: If the scope manager has no in-scope assets, or if
+                the default CVE fetch fails.
         """
+        self._require_in_scope()
         self.last_check = datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
 
         # Fetch new CVEs
@@ -530,17 +553,31 @@ high-impact CVEs are discovered that match the scope.
         return alerts
 
     def _fetch_recent_cves(self) -> list[dict[str, Any]]:
-        """
-        Fetch recent CVEs from available sources.
+        """Fetch recently published CVEs via :class:`RecentService`.
 
-        This is a placeholder that returns an empty list.
-        In production, integrate with:
-        - NVD API (nvd_client.get_recent())
-        - CISA KEV feed
-        - pocmap.clients.cveorg_client for CVE.org data
+        Returns CVEInfo-shaped dicts (``id``, ``product``, ``cvss``, …) suitable
+        for :meth:`ScopeManager.match_cves_to_scope`. A successful empty window
+        yields ``[]``; network/API failures raise so monitoring never pretends
+        "no new CVEs" when the fetch never ran.
         """
-        # Placeholder - should be implemented with actual CVE source
-        return []
+        try:
+            with RecentService() as svc:
+                results = svc.find_recent_cves(since="24h", limit=50)
+        except Exception as exc:
+            logger.error("ScopeMonitor CVE fetch failed: %s", exc)
+            raise RuntimeError(
+                f"ScopeMonitor could not fetch recent CVEs "
+                f"({type(exc).__name__}: {exc})"
+            ) from exc
+
+        out: list[dict[str, Any]] = []
+        for result in results:
+            info = result.cve_info
+            if hasattr(info, "model_dump"):
+                out.append(info.model_dump(mode="json"))
+            else:
+                out.append(dict(info))
+        return out
 
     def _send_alerts(self, cves: list[dict[str, Any]]) -> None:
         """Send alert notifications via configured webhooks."""
@@ -633,6 +670,7 @@ high-impact CVEs are discovered that match the scope.
         self.is_running = True
         interval_seconds = interval_hours * 3600
 
+        self._require_in_scope()
         print(f"Starting CVE monitoring (interval: {interval_hours}h)")
         print(f"Alert threshold: CVSS >= {self.alert_threshold}")
         print(f"Webhooks configured: {len(self.webhooks)}")

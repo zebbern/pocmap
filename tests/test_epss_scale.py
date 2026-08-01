@@ -18,6 +18,14 @@ from types import SimpleNamespace
 
 import pocmap.mcp_server as mcp_server
 from pocmap.bugbounty.prioritization import _get_epss_score
+from pocmap.models import (
+    CVEInfo,
+    CVSSScore,
+    CVSSVersion,
+    ExploitSource,
+    RecentExploitResult,
+    Severity,
+)
 
 # ---------------------------------------------------------------------------
 # ServiceAdapter._normalize_cve_info
@@ -82,3 +90,33 @@ def test_rounding_preserves_epss_published_precision():
     for pct, expected in [(0.001, 0.00001), (0.023, 0.00023), (12.345, 0.12345)]:
         info = SimpleNamespace(epss=pct)
         assert mcp_server.ServiceAdapter._normalize_cve_info(info)["epss_score"] == expected
+
+
+# ---------------------------------------------------------------------------
+# find_recent_exploits: cve_info must use the same normalizer (not raw dump)
+# ---------------------------------------------------------------------------
+
+def test_normalize_recent_result_scales_epss_and_cvss_score_key():
+    """Agents must not see cvss.base_score / epss 0-100 from find_recent_exploits."""
+    result = RecentExploitResult(
+        cve_info=CVEInfo(
+            id="CVE-2024-1234",
+            epss=45.0,
+            cvss=CVSSScore(
+                version=CVSSVersion.V3_1,
+                base_score=8.8,
+                severity=Severity.HIGH,
+                vector_string="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            ),
+            references={"NVD": "https://nvd.nist.gov/vuln/detail/CVE-2024-1234"},
+        ),
+        has_poc=True,
+        poc_sources=[ExploitSource.GITHUB],
+    )
+    out = mcp_server.ServiceAdapter._normalize_recent_result(result)
+    assert out["cve_info"]["cvss"]["score"] == 8.8
+    assert "base_score" not in out["cve_info"]["cvss"]
+    assert math.isclose(out["cve_info"]["epss_score"], 0.45, rel_tol=1e-9)
+    assert "epss" not in out["cve_info"]
+    assert isinstance(out["cve_info"]["references"], list)
+    assert out["poc_sources"] == ["github"]

@@ -25,6 +25,9 @@ ENV/
 htmlcov/
 .tox/
 
+# MkDocs build output
+site/
+
 # pocmap runtime
 .cache/
 .env

@@ -109,7 +109,7 @@ def test_lookup_cve_not_found_category(monkeypatch: Any) -> None:
     result = mcp_server.lookup_cve("CVE-2021-44228")
     assert result["category"] == "not_found"
     assert result["cve_id"] == "CVE-2021-44228"
-    # Full AGENTS.md error envelope: error_type present, retryable False, context set.
+    # Full MCP error envelope: error_type present, retryable False, context set.
     assert result["error_type"] == "NotFoundError"
     assert result["retryable"] is False
     assert result["context"] == "lookup_cve(CVE-2021-44228)"
