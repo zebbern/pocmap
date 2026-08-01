@@ -13,9 +13,10 @@ drift is a known, recurring problem in this repo — treat every claim in the do
 as suspect until confirmed against source.
 
 ## The source of truth (authoritative)
-- **MCP tools:** the `@mcp.tool(name=...)` / `@mcp.resource(...)` / `@mcp.prompt(...)`
-  decorators in `src/pocmap/mcp_server.py`. Grep: `@mcp\.(tool|resource|prompt)`.
-  There should be **22 tools, 3 resources, 3 prompts**.
+- **MCP tools:** the `@_tool(...)` / `@mcp.resource(...)` / `@mcp.prompt(...)`
+  decorators under `src/pocmap/mcp/` (tools/, resources.py, prompts.py). Grep:
+  `@_tool\(|@mcp\.(resource|prompt)`. There should be **22 tools, 3 resources, 3 prompts**.
+  `src/pocmap/mcp_server.py` is only the compatibility facade.
 - **CLI commands:** the `@app.command()` functions in `src/pocmap/cli.py`
   (the function name is the command name). There should be **13 commands** (12 top-level
   `@app.command()` plus the `cache` sub-app added via `app.add_typer(cache_app,

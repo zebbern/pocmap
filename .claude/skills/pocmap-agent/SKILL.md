@@ -30,7 +30,7 @@ pip install "pocmap[server]"   # CLI + MCP (mcp SDK 2.x / MCPServer via [server]
 pocmap lookup CVE-2021-44228
 python -m pocmap --help        # authoritative CLI list (13 commands)
 
-# MCP server (src/pocmap/mcp_server.py → pocmap-mcp)
+# MCP server (src/pocmap/mcp/ → pocmap-mcp via mcp_server facade)
 uvx --from pocmap[server] pocmap-mcp
 pocmap-mcp                     # after install
 python -m pocmap.mcp_server

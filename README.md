@@ -1087,7 +1087,7 @@ Use these schemas for:
 ```
 
 **Layered architecture:**
-1. **Presentation Layer**: CLI (`cli.py`) + MCP Server (`pocmap.mcp_server` / `pocmap-mcp`)
+1. **Presentation Layer**: CLI (`cli.py`) + MCP Server (`pocmap.mcp` / `pocmap.mcp_server` facade / `pocmap-mcp`)
 2. **Service Layer**: Business logic (7 services: CVE, Exploit, Lab, Report, Bug Bounty, Recent, Product Discovery)
 3. **Client Layer**: External API clients (NVD, GitHub, CVE.org, ExploitDB, etc.)
 4. **Model Layer**: 16 Pydantic models with full validation and JSON Schema support (13 exported as standalone JSON schemas)

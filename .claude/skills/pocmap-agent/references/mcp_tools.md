@@ -4,9 +4,9 @@ All **22** MCP tools for vulnerability research, exploit discovery, and report g
 This file is the **canonical MCP / agent consumption guide** (not `AGENTS.md`).
 
 **Start the server:** `uvx --from pocmap[server] pocmap-mcp` (or installed `pocmap-mcp` /
-`python -m pocmap.mcp_server`). Implementation: `src/pocmap/mcp_server.py`
-(`mcp.server.mcpserver.MCPServer`, mcp SDK 2.x). Tools return **dicts**
-(`structuredContent`), not JSON strings.
+`python -m pocmap.mcp_server`). Implementation: `src/pocmap/mcp/` (facade
+`src/pocmap/mcp_server.py`; `mcp.server.mcpserver.MCPServer`, mcp SDK 2.x). Tools
+return **dicts** (`structuredContent`), not JSON strings.
 
 Common types: **Exploit**=`{source,url,title,language,stars,forks,rank,command}`
 (`language`/`stars`/`forks` are `null` for every non-GitHub source; `rank` is set only

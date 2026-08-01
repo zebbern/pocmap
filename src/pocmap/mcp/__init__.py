@@ -1,33 +1,26 @@
-#!/usr/bin/env python3
-"""PocMap AI - MCP Server for CVE lookup and exploit discovery.
+"""PocMap MCP server package.
 
-Implementation lives in :mod:`pocmap.mcp`. This module is the stable public
-import path and ``pocmap-mcp`` / ``python -m pocmap.mcp_server`` entry point.
-
-Usage:
-    pocmap-mcp                              # Run with STDIO transport (default)
-    python -m pocmap.mcp_server             # Same, via module
-    python mcp_server.py                    # Repo-root launcher shim
+Implementation lives here; ``pocmap.mcp_server`` remains the public import path
+and ``pocmap-mcp`` entry point for compatibility.
 """
 
 from __future__ import annotations
 
-from pocmap.mcp import (
+# Register tools / resources / prompts on ``mcp`` (decorator side effects).
+from pocmap.mcp import prompts as _prompts
+from pocmap.mcp import resources as _resources
+from pocmap.mcp.adapter import MAX_CVE_BULK, ServiceAdapter
+from pocmap.mcp.errors import _format_cve_text, _format_error_json, _ok, _tool_error
+from pocmap.mcp.html_report import _build_html_report, _safe_url
+from pocmap.mcp.registration import (
     _LOCAL_ONLY,
     _READ_ONLY,
     _WRITES_TO_DISK,
-    MAX_CVE_BULK,
-    ServiceAdapter,
-    _build_html_report,
-    _format_cve_text,
-    _format_error_json,
-    _ok,
-    _safe_url,
-    _svc,
     _tool,
-    _tool_error,
     _validate_tool_input,
-    app_lifespan,
+)
+from pocmap.mcp.server import _svc, app_lifespan, main, mcp
+from pocmap.mcp.tools import (
     check_kev_status,
     cpe_to_cve,
     cve_to_cpe,
@@ -49,10 +42,11 @@ from pocmap.mcp import (
     get_epss_score,
     get_rapid_response_playbook,
     lookup_cve,
-    main,
-    mcp,
     verify_github_pocs,
 )
+
+# Keep side-effect aliases referenced so ruff does not drop the imports.
+_ = (_prompts, _resources)
 
 __all__ = [
     "MAX_CVE_BULK",
@@ -95,6 +89,3 @@ __all__ = [
     "mcp",
     "verify_github_pocs",
 ]
-
-if __name__ == "__main__":
-    main()

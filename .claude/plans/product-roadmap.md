@@ -15,7 +15,7 @@ security professional reach for pocmap weekly.
   `cpe2cve`, `readme`, `schemas`, `latest`, `discover`, `package`, `doctor`, `cache`.
   `--format {table,json,csv,md,sarif}` on read commands, `--quiet`, shell completion, and a
   documented 0-6 exit-code contract (`utils/exit_codes.py`).
-- **MCP** (`src/pocmap/mcp_server.py`, `pocmap-mcp`): 22 tools, 3 resources, 3 prompts on
+- **MCP** (`src/pocmap/mcp/`, facade `pocmap.mcp_server`, `pocmap-mcp`): 22 tools, 3 resources, 3 prompts on
   `mcp` SDK 2.x. Tools return real structured content under object schemas, carry
   `ToolAnnotations`, and share an error taxonomy (`category`/`retryable`/`error_type`).
 - **HTTP**: SSRF-guarded client with per-hop redirect re-validation, credential stripping on

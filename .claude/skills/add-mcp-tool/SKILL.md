@@ -12,8 +12,8 @@ description: >
 
 Adding one tool touches **four places in lockstep**. Miss one and you get drift
 (the exact problem the `agent-docs-consistency` reviewer exists to catch). The
-MCP server implementation is `src/pocmap/mcp_server.py` (console script `pocmap-mcp`).
-Repo-root `mcp_server.py` is only a launcher shim.
+MCP implementation lives in `src/pocmap/mcp/` (console script `pocmap-mcp` via the
+`pocmap.mcp_server` facade). Repo-root `mcp_server.py` is only a launcher shim.
 
 Work through this checklist in order.
 
@@ -22,9 +22,9 @@ The tool should be a thin wrapper over a **synchronous** service method that
 returns Pydantic models. If the capability doesn't exist yet, add the method to
 the right service (or a new client under `src/pocmap/clients/` that uses
 `HTTPClient` so it inherits the SSRF guard). Do not put business logic in
-`pocmap.mcp_server`.
+`pocmap.mcp` tool modules.
 
-## 2. `ServiceAdapter` method + normalizer — in `src/pocmap/mcp_server.py`
+## 2. `ServiceAdapter` method + normalizer — in `src/pocmap/mcp/adapter.py`
 `ServiceAdapter` converts service models → plain dicts for JSON tool responses.
 Follow the existing shape:
 
@@ -45,9 +45,10 @@ Reuse an existing `_normalize_*` static method (`_normalize_cve_info`,
 `_normalize_recent_result`, `_normalize_discovery_result`). Add a new one only if
 the return type is genuinely new; use `ServiceAdapter._enum_val(...)` for enums.
 
-## 3. `@_tool` wrapper — in `src/pocmap/mcp_server.py`
-Register via the house `_tool()` helper (not bare `@mcp.tool`). Match conventions
-exactly:
+## 3. `@_tool` wrapper — in `src/pocmap/mcp/tools/`
+Register via the house `_tool()` helper from `pocmap.mcp.registration` (not bare
+`@mcp.tool`). Put the tool in the matching module under `tools/` and ensure
+`tools/__init__.py` re-exports it. Match conventions exactly:
 
 ```python
 @_tool(
@@ -101,7 +102,7 @@ Update **all** of these so the tool count and contract stay truthful:
 - `README.md` — MCP tools table if the tool is user-facing.
 
 ## 5. Verify
-- `ruff check src/pocmap/mcp_server.py` (the PostToolUse hook also runs this on edit).
+- `ruff check src/pocmap/mcp src/pocmap/mcp_server.py` (the PostToolUse hook also runs this on edit).
 - Smoke-test the server imports and lists the tool:
   `python -c "import pocmap.mcp_server as m; print([t for t in dir(m) if not t.startswith('_')][:5])"`
   or start it: `pocmap-mcp` / `python -m pocmap.mcp_server` (STDIO) and call the tool from a client.

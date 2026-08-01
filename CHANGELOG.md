@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **MCP server modularized into `pocmap.mcp`.** Implementation is under
+  `src/pocmap/mcp/` (`adapter`, `errors`, `html_report`, `registration`, `server`,
+  `tools/`, `resources`, `prompts`). `pocmap.mcp_server` remains the stable import
+  path and `pocmap-mcp` entry point (no behaviour change).
+
 ### Fixed
 
 - **MCP reports no longer omit third-party exploit sources or hide fetch failures.**

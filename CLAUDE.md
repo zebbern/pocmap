@@ -43,16 +43,17 @@ Defaulting to internal knowledge often leads to outdated implementations. For ex
 
 ## Project Structure — IMPORTANT
 - **Real code lives in `src/pocmap/`** — the single source of truth. Edit here: `cli.py`, `config.py`,
-  `models.py`, `services/`, `clients/`, `bugbounty/`, `utils/`, `data/`, `templates/`, `mcp_server.py`.
-  Installed as editable `pocmap`. (The old repo-root shadow `models.py`/`services.py`/`__init__.py` mock
-  modules were **removed**; there is no silent mock fallback.)
+  `models.py`, `services/`, `clients/`, `bugbounty/`, `utils/`, `data/`, `templates/`, `mcp/`,
+  `mcp_server.py` (facade). Installed as editable `pocmap`. (The old repo-root shadow
+  `models.py`/`services.py`/`__init__.py` mock modules were **removed**; there is no silent mock fallback.)
 - **MCP tools return `dict[str, Any]`**, not a JSON string — the SDK turns that into real
   `structuredContent`. Resources and prompts still return `str`. Register tools through the
   local `_tool()` helper, which applies the house `ToolAnnotations` defaults.
-- **MCP server implementation** is `src/pocmap/mcp_server.py` (22 tools, 3 resources, 3 prompts), exposed as
-  the `pocmap-mcp` console script. Repo-root `mcp_server.py` is a thin launcher shim that also
-  puts `src/` on `sys.path`, so `python mcp_server.py` works in a clone that was never installed.
-  It forwards every flag to `main()`, so `--transport sse|http` works through it too.
+- **MCP server implementation** lives in `src/pocmap/mcp/` (tools/, resources, prompts, adapter,
+  errors, registration) with `src/pocmap/mcp_server.py` as the stable import / `pocmap-mcp`
+  entry facade (22 tools, 3 resources, 3 prompts). Repo-root `mcp_server.py` is a thin launcher
+  shim that also puts `src/` on `sys.path`, so `python mcp_server.py` works in a clone that was
+  never installed. It forwards every flag to `main()`, so `--transport sse|http` works through it too.
 - Playbook JSON is loaded from `src/pocmap/bugbounty/playbooks/`.
 
 ## Testing
