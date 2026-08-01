@@ -133,7 +133,8 @@ exploitation-first), each `{technique_id, name, mapping_type, comment, url, refe
 
 ### find_github_pocs
 **Purpose**: Find PoC exploits for a CVE on GitHub.
-**When to use**: When you need working exploit code for testing. Always verify before running.
+**When to use**: **First tool** when the user only asks for a PoC / exploit repo / exploit
+code. Do not open with `generate_json_report` for that ask. Always verify before running.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
 - `limit` (int, default `10`): Maximum results
@@ -278,10 +279,9 @@ is the nuclei invocation (`null` when the template path is unknown).
 
 ### generate_json_report
 **Purpose**: Everything known about one or more CVEs, in a single call.
-**When to use**: **Default entry point for any question about known CVE IDs.** One round
-trip covering CVE details, all registered exploit sources (built-ins + plugins), labs,
-and bug bounty reports. Takes comma-separated IDs for compare/prioritize. Drill into a
-single-purpose tool afterwards only when you need one source in isolation.
+**When to use**: Full assessment / prioritization / compare several CVEs — not a PoC-only
+ask (use `find_github_pocs` or the matching DB tool first). One round trip for CVE details,
+all registered exploit sources (built-ins + plugins), labs, and bug bounty reports.
 **Parameters**:
 - `cve_ids` (str, required): Comma-separated CVE IDs, e.g. `"CVE-2021-44228,CVE-2021-45046"`
 **Returns**: JSON with `generated_at`, `total_requested`, `total_entries`, `total_errors`,

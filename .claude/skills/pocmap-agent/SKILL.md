@@ -48,8 +48,9 @@ with CVEService() as svc:
 
 | Goal | MCP tool | CLI |
 |------|----------|-----|
-| **Everything about known CVE ID(s)** | **`generate_json_report`** (start here) | `pocmap lookup` / `bulk` |
-| Look up one CVE | `lookup_cve` | `pocmap lookup CVE-…` |
+| **PoC / exploit repos only** | **`find_github_pocs`** (first) | (shown in `lookup`) |
+| **Full assessment of known CVE ID(s)** | **`generate_json_report`** | `pocmap lookup` / `bulk` |
+| Look up one CVE (metadata) | `lookup_cve` | `pocmap lookup CVE-…` |
 | Recent CVEs / monitoring | `find_recent_exploits` | `pocmap latest --since 24h` |
 | CVEs for a deployed product | `discover_product_cves` | `pocmap discover "Product"` |
 | CVEs for a dependency / lockfile | `discover_package_cves` | — |

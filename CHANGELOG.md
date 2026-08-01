@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **MCP routing copy:** server `instructions` and tool descriptions now send PoC-only
+  asks to `find_github_pocs` (or the matching DB tool) and reserve `generate_json_report`
+  for full assessments — agents should not open every CVE question with the heavy report.
 - **MCP server modularized into `pocmap.mcp`.** Implementation is under
   `src/pocmap/mcp/` (`adapter`, `errors`, `html_report`, `registration`, `server`,
   `tools/`, `resources`, `prompts`). `pocmap.mcp_server` remains the stable import

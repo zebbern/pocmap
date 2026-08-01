@@ -42,8 +42,11 @@ mcp = MCPServer(
         "find practice labs on Vulhub and HackTheBox; "
         "convert between CVEs and CPEs; and generate vulnerability reports. "
         "Always verify CVE IDs are in the correct format (CVE-YYYY-NNNN+) before querying. "
-        "When a user asks about a vulnerability, provide comprehensive context including "
-        "CVSS scores, EPSS scores, KEV status, available exploits, and practice environments."
+        "Tool routing: if the user only wants a PoC, exploit code, or GitHub repos for a "
+        "known CVE, call find_github_pocs (or the matching Metasploit/ExploitDB/Nuclei "
+        "tool) — do not open with generate_json_report. Use generate_json_report when they "
+        "want a full assessment (severity, KEV/EPSS, all exploit sources, labs, bounty). "
+        "Always read sources / error category before concluding that nothing was found."
     ),
     lifespan=app_lifespan,
     # Bind address is no longer constructor state: the 2026-07-28 protocol core

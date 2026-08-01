@@ -13,14 +13,14 @@ Auto-generated from the registered PocMap MCP server (`python scripts/generate_m
 | `discover_product_cves` | Discover CVEs affecting a product by name and version. |
 | `find_bug_bounty_reports` | Find bug bounty reports and write-ups for a CVE. |
 | `find_exploitdb_entry` | Find an ExploitDB entry for a CVE. |
-| `find_github_pocs` | Find GitHub repositories containing Proof-of-Concept (PoC) exploits for a CVE. |
+| `find_github_pocs` | FIRST CHOICE when the user only wants a PoC, exploit code, or GitHub repos for a known CVE — do not open with generate_json_report for that ask. |
 | `find_metasploit_module` | Find a Metasploit Framework module for a CVE. |
 | `find_nuclei_template` | Find a Nuclei vulnerability scanner template for a CVE. |
 | `find_practice_labs` | Find CTF (Capture The Flag) labs, vulnerable machines, and practice environments for a CVE. |
 | `find_recent_exploits` | Find recently published CVEs with exploit and PoC intelligence. |
 | `find_vulhub_docker` | Find a Vulhub Docker environment for a CVE. |
 | `generate_html_report` | Generate a comprehensive HTML vulnerability report for one or more CVEs. |
-| `generate_json_report` | START HERE for any question about one or more known CVE IDs. |
+| `generate_json_report` | Full assessment for one or more known CVE IDs in a single call: description, CVSS, EPSS, KEV, exploits across GitHub/Metasploit/ExploitDB/Nuclei (plus plugins), practice labs, and bug bounty reports. |
 | `get_attack_techniques` | Get the MITRE ATT&CK techniques a CVE maps to — how it is exploited, and what the attacker achieves afterwards. |
 | `get_bug_bounty_playbook` | Get the bug bounty submission playbook from finding to report submission. |
 | `get_cve_assessment_playbook` | Get the complete CVE assessment playbook with detailed step-by-step workflow. |
@@ -236,7 +236,7 @@ Find an ExploitDB entry for a CVE. ExploitDB is the ultimate archive of exploit 
 
 ### `find_github_pocs`
 
-Find GitHub repositories containing Proof-of-Concept (PoC) exploits for a CVE. Returns a list of GitHub repos with titles, URLs, programming languages, star counts, fork counts, and relevance rankings. These repos often contain working exploit code, vulnerable applications for testing, detection scripts, and educational materials. Use this tool when the user wants to find exploit code, understand how a vulnerability is exploited, or find detection/remediation scripts on GitHub. Results are sorted by stars.
+FIRST CHOICE when the user only wants a PoC, exploit code, or GitHub repos for a known CVE — do not open with generate_json_report for that ask. Searches Nomi-sec + TrickestCVE; when both are empty, falls back to GitHub Search so fresh PoC repos are not missed. Also promotes PoC-like URLs from the CVE's own references. Returns titles, URLs, languages, stars, forks, plus a sources health block (ok/empty/rate_limited/error). Sorted by stars. Use generate_json_report only when they also need severity/KEV/labs/bounty in one shot.
 
 **Input schema**
 
@@ -457,7 +457,7 @@ Generate a comprehensive HTML vulnerability report for one or more CVEs. The rep
 
 ### `generate_json_report`
 
-START HERE for any question about one or more known CVE IDs. Returns everything the individual tools return, in a single call: CVE details (description, CVSS, EPSS, KEV status), every discovered exploit and PoC across GitHub, Metasploit, ExploitDB and Nuclei, practice labs, and bug bounty reports. Prefer this over calling lookup_cve + find_github_pocs + find_metasploit_module + find_nuclei_template + check_kev_status + find_bug_bounty_reports + find_practice_labs separately — it is one round trip instead of seven. Each entry includes a sources block (per-source ok/empty/rate_limited/error) so an empty exploit list is never a silent negative. Accepts comma-separated IDs, so it also answers 'compare/prioritize these CVEs' in one call. Reach for the single-purpose tools afterwards only to drill into a specific source. Also suitable for automation, CI/CD, and dashboards.
+Full assessment for one or more known CVE IDs in a single call: description, CVSS, EPSS, KEV, exploits across GitHub/Metasploit/ExploitDB/Nuclei (plus plugins), practice labs, and bug bounty reports. Prefer this when the user wants a complete picture, prioritization, or compare/prioritize several CVEs — not when they only asked for a PoC or exploit repo (use find_github_pocs or the matching DB tool instead; those are faster and more focused). Beats calling lookup_cve + every exploit/lab/bounty tool separately for a full write-up. Each entry includes a sources block (ok/empty/rate_limited/error) so an empty exploit list is never a silent negative. Accepts comma-separated IDs. Also suitable for automation, CI/CD, and dashboards.
 
 **Input schema**
 

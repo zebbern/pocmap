@@ -12,18 +12,16 @@ from pocmap.mcp.server import _svc
 @_tool(
     name="generate_json_report",
     description=(
-        "START HERE for any question about one or more known CVE IDs. Returns everything "
-        "the individual tools return, in a single call: CVE details (description, CVSS, "
-        "EPSS, KEV status), every discovered exploit and PoC across GitHub, Metasploit, "
-        "ExploitDB and Nuclei, practice labs, and bug bounty reports. "
-        "Prefer this over calling lookup_cve + find_github_pocs + find_metasploit_module + "
-        "find_nuclei_template + check_kev_status + find_bug_bounty_reports + "
-        "find_practice_labs separately — it is one round trip instead of seven. "
-        "Each entry includes a sources block (per-source ok/empty/rate_limited/error) so an "
-        "empty exploit list is never a silent negative. "
-        "Accepts comma-separated IDs, so it also answers 'compare/prioritize these CVEs' "
-        "in one call. Reach for the single-purpose tools afterwards only to drill into a "
-        "specific source. Also suitable for automation, CI/CD, and dashboards."
+        "Full assessment for one or more known CVE IDs in a single call: description, "
+        "CVSS, EPSS, KEV, exploits across GitHub/Metasploit/ExploitDB/Nuclei (plus plugins), "
+        "practice labs, and bug bounty reports. Prefer this when the user wants a complete "
+        "picture, prioritization, or compare/prioritize several CVEs — not when they only "
+        "asked for a PoC or exploit repo (use find_github_pocs or the matching DB tool "
+        "instead; those are faster and more focused). "
+        "Beats calling lookup_cve + every exploit/lab/bounty tool separately for a full "
+        "write-up. Each entry includes a sources block (ok/empty/rate_limited/error) so an "
+        "empty exploit list is never a silent negative. Accepts comma-separated IDs. "
+        "Also suitable for automation, CI/CD, and dashboards."
     ),
 )
 def generate_json_report(cve_ids: str) -> dict[str, Any]:
