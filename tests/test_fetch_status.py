@@ -42,6 +42,17 @@ from pocmap.utils.http import (
     is_programming_error,
 )
 
+
+@pytest.fixture(autouse=True)
+def _no_cve_reference_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ERR-RESULT tests offline: stub CVE reference promotion."""
+    monkeypatch.setattr(
+        ExploitService,
+        "_pocs_from_cve_references",
+        lambda self, cve_id: [],
+    )
+
+
 CVE = "CVE-2021-44228"
 
 

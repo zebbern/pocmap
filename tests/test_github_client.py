@@ -273,3 +273,135 @@ def test_rate_limit_during_enrichment_propagates() -> None:
 
     with pytest.raises(RateLimitError):
         client.search_pocs("CVE-2021-44228")
+
+
+# ---------------------------------------------------------------------------
+# GitHub Search API fallback when curated indexes are empty
+# ---------------------------------------------------------------------------
+
+_SEARCH_ITEM = {
+    "full_name": "zebbernCVE/CVE-2026-26832",
+    "html_url": "https://github.com/zebbernCVE/CVE-2026-26832",
+    "description": "node-tesseract-ocr command injection PoC",
+    "stargazers_count": 0,
+    "forks_count": 0,
+}
+
+
+def _empty_index_client(
+    *,
+    search_payload: dict[str, Any] | Exception,
+) -> tuple[GitHubClient, MagicMock]:
+    """Nomi + Trickest empty; Search returns *search_payload* or raises it."""
+    http = MagicMock()
+    search_calls: list[dict[str, Any]] = []
+
+    def fake_get_json(url: str, **kwargs: Any) -> Any:
+        if url.endswith(".json"):
+            return []
+        if url.rstrip("/").endswith("/search/repositories"):
+            search_calls.append({"url": url, **kwargs})
+            if isinstance(search_payload, Exception):
+                raise search_payload
+            return search_payload
+        return {}
+
+    http.get_json.side_effect = fake_get_json
+    http.get_text.return_value = ""
+    http._search_calls = search_calls  # type: ignore[attr-defined]
+    return GitHubClient(http_client=http), http
+
+
+def test_github_search_fallback_when_indexes_empty() -> None:
+    client, http = _empty_index_client(
+        search_payload={"total_count": 1, "items": [_SEARCH_ITEM]}
+    )
+    result = client.search_pocs("CVE-2026-26832")
+
+    assert len(result) == 1
+    assert result[0].url == "https://github.com/zebbernCVE/CVE-2026-26832"
+    assert http._search_calls  # type: ignore[attr-defined]
+    assert http._search_calls[0]["params"]["q"] == "CVE-2026-26832"  # type: ignore[attr-defined]
+
+
+def test_github_search_not_called_when_indexes_have_results() -> None:
+    http = MagicMock()
+    search_called = False
+
+    def fake_get_json(url: str, **_: Any) -> Any:
+        nonlocal search_called
+        if url.endswith(".json"):
+            return _nomi_repos(5)
+        if "search/repositories" in url:
+            search_called = True
+            return {"items": [_SEARCH_ITEM]}
+        return {}
+
+    http.get_json.side_effect = fake_get_json
+    http.get_text.return_value = ""
+    client = GitHubClient(http_client=http)
+
+    result = client.search_pocs("CVE-2021-44228")
+
+    assert not search_called
+    assert all("zebbernCVE" not in (ex.url or "") for ex in result)
+
+
+def test_github_search_rate_limit_propagates_when_indexes_empty() -> None:
+    client, _http = _empty_index_client(
+        search_payload=RateLimitError("throttled", status_code=403)
+    )
+    with pytest.raises(RateLimitError):
+        client.search_pocs("CVE-2026-26832")
+
+
+def test_github_search_filters_aggregator_hits() -> None:
+    client, _http = _empty_index_client(
+        search_payload={
+            "items": [
+                {
+                    "full_name": "nomi-sec/PoC-in-GitHub",
+                    "html_url": "https://github.com/nomi-sec/PoC-in-GitHub",
+                    "description": "index",
+                    "stargazers_count": 9000,
+                    "forks_count": 0,
+                },
+                _SEARCH_ITEM,
+            ]
+        }
+    )
+    urls = [ex.url for ex in client.search_pocs("CVE-2026-26832")]
+    assert urls == ["https://github.com/zebbernCVE/CVE-2026-26832"]
+
+
+def test_exploits_from_reference_urls_promotes_cve_named_repos() -> None:
+    from pocmap.clients.github_client import exploits_from_reference_urls
+
+    urls = [
+        "https://github.com/zebbernCVE/CVE-2026-26832",
+        "https://github.com/zapolnoch/node-tesseract-ocr",  # upstream, not a PoC
+        "https://github.com/nomi-sec/PoC-in-GitHub",  # aggregator
+        "https://nvd.nist.gov/vuln/detail/CVE-2026-26832",
+        "https://github.com/researcher/my-poc/tree/main/docs",  # needs CVE in URL
+        "https://github.com/lab/CVE-2026-26832-exploit",
+    ]
+    got = exploits_from_reference_urls(urls, "CVE-2026-26832")
+    got_urls = {ex.url for ex in got}
+    assert "https://github.com/zebbernCVE/CVE-2026-26832" in got_urls
+    assert "https://github.com/lab/CVE-2026-26832-exploit" in got_urls
+    assert "https://github.com/zapolnoch/node-tesseract-ocr" not in got_urls
+    assert "https://github.com/nomi-sec/PoC-in-GitHub" not in got_urls
+    # tree/blob stripped to repo root; no CVE in path and name is not poc-like
+    assert "https://github.com/researcher/my-poc" not in got_urls
+
+
+def test_exploits_from_reference_urls_poc_name_requires_cve_in_url() -> None:
+    from pocmap.clients.github_client import exploits_from_reference_urls
+
+    # poc in name + CVE elsewhere in the raw URL (query/fragment atypical but
+    # the common case is CVE in a longer path we already handle via cve_in_path)
+    got = exploits_from_reference_urls(
+        ["https://github.com/alice/log4j-poc?ref=CVE-2021-44228"],
+        "CVE-2021-44228",
+    )
+    assert [ex.url for ex in got] == ["https://github.com/alice/log4j-poc"]

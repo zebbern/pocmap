@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **GitHub PoC recall for index-lag CVEs.** When Nomi-sec and TrickestCVE both return no
+  candidates, `GitHubClient.search_pocs` falls back to GitHub Search
+  (`/search/repositories?q=<CVE>`). PoC-like CVE reference URLs (CVE id in the repo path,
+  or poc/exploit-named repos mentioning the CVE) are merged in
+  `ExploitService._find_github`. Rate limits still propagate as `rate_limited`, never as
+  empty.
 - **MCP reports no longer omit third-party exploit sources or hide fetch failures.**
   `generate_json_report` / `generate_html_report` now collect exploits through
   `ExploitService.find_exploits_with_status` (same aggregation as `ReportService`, plus

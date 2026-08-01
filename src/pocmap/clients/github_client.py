@@ -1,14 +1,18 @@
 """GitHub API client for PoC discovery.
 
-Searches for exploit code on GitHub via the Nomi-sec and TrickestCVE
-curated repositories, plus direct repository metadata lookups.
+Searches for exploit code on GitHub via the Nomi-sec and TrickestCVE curated
+indexes, with a GitHub Search API fallback when both indexes are empty, plus
+direct repository metadata lookups. PoC-like CVE reference URLs can also be
+promoted via :func:`exploits_from_reference_urls`.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
 from typing import Any
+from urllib.parse import urlparse
 
 from pocmap.config import (
     GITHUB_API_BASE,
@@ -46,6 +50,11 @@ _AGGREGATOR_NAME_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+_POC_NAME_RE = re.compile(r"(?i)(poc|exploit|vulnerability)")
+
+# Cap Search API pages — one call, small page, only used when indexes are empty.
+_SEARCH_PER_PAGE = 10
+
 
 def _is_aggregator(url: str) -> bool:
     """Whether *url* looks like a CVE index rather than a PoC."""
@@ -58,6 +67,65 @@ def _is_aggregator(url: str) -> bool:
 def _repo_key(url: str) -> str:
     """Normalized identity for a repo URL, for cross-source dedup."""
     return url.rstrip("/").lower()
+
+
+def normalize_github_repo_url(url: str) -> str | None:
+    """Return ``https://github.com/{owner}/{repo}`` or ``None`` if not a repo URL."""
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https"):
+        return None
+    host = (parsed.netloc or "").lower()
+    if host not in ("github.com", "www.github.com"):
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) < 2:
+        return None
+    owner, repo = parts[0], parts[1]
+    # Drop .git suffix if present
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    if not owner or not repo:
+        return None
+    return f"https://github.com/{owner}/{repo}"
+
+
+def exploits_from_reference_urls(urls: Iterable[str], cve_id: str) -> list[Exploit]:
+    """Promote PoC-like GitHub URLs from CVE reference lists.
+
+    Only repos that look like dedicated PoCs are kept — not every vendor/upstream
+    link. A URL qualifies when the CVE id appears in the repo path, or the repo
+    name looks like a PoC/exploit/vulnerability *and* the CVE id appears somewhere
+    in the URL. Aggregator indexes are rejected.
+    """
+    cve_norm = cve_id.upper().strip()
+    cve_lower = cve_norm.lower()
+    seen: set[str] = set()
+    out: list[Exploit] = []
+    for raw in urls:
+        repo_url = normalize_github_repo_url(str(raw))
+        if not repo_url or _is_aggregator(repo_url):
+            continue
+        key = _repo_key(repo_url)
+        if key in seen:
+            continue
+        path_lower = urlparse(repo_url).path.lower()
+        repo_name = path_lower.rstrip("/").rsplit("/", 1)[-1]
+        cve_in_path = cve_lower in path_lower
+        poc_named = bool(_POC_NAME_RE.search(repo_name)) and cve_lower in str(raw).lower()
+        if not (cve_in_path or poc_named):
+            continue
+        seen.add(key)
+        out.append(
+            Exploit(
+                source=ExploitSource.GITHUB,
+                url=repo_url,
+                title=repo_url.rstrip("/").rsplit("/", 1)[-1],
+            )
+        )
+    return out
 
 
 # How many repos to enrich when the caller sets no limit. Enrichment costs one
@@ -91,12 +159,13 @@ class GitHubClient:
         self._client = http_client or HTTPClient(headers=settings.github_headers)
 
     def search_pocs(self, cve_id: str, limit: int | None = None) -> list[Exploit]:
-        """Search for PoCs on GitHub via Nomi-sec and TrickestCVE.
+        """Search for PoCs on GitHub via Nomi-sec, TrickestCVE, and Search fallback.
 
-        Both sources are consulted and their results unioned (deduped by repo
-        URL). Nomi-sec indexes only repositories whose name or description
-        names the CVE, so TrickestCVE — which is broader but noisier — fills
-        real gaps; it used to be unreachable whenever Nomi-sec answered at all.
+        Curated indexes are consulted first and unioned (deduped by repo URL).
+        Nomi-sec indexes repositories whose name or description names the CVE;
+        TrickestCVE is broader but noisier. When **both** indexes yield no
+        candidates after aggregator filtering, the GitHub Search API is queried
+        so index lag does not look like "no PoCs exist".
 
         **Ranking matters more than the union.** TrickestCVE lists include
         repositories that merely mention a CVE (personal dotfile repos, course
@@ -153,6 +222,24 @@ class GitHubClient:
                 title=url.rstrip("/").rsplit("/", 1)[-1] if is_github else url,
             )
 
+        # Index lag: curated feeds often miss fresh / low-star PoC repos that
+        # GitHub Search already knows about (e.g. CVE-YYYY-NNNNN-named repos).
+        if not candidates:
+            for repo in self._fetch_github_search(cve_id):
+                url = repo.get("html_url", "")
+                if not url or _is_aggregator(url):
+                    continue
+                candidates.setdefault(
+                    _repo_key(url),
+                    Exploit(
+                        source=ExploitSource.GITHUB,
+                        url=url,
+                        title=repo.get("description") or repo.get("full_name") or "N/A",
+                        stars=repo.get("stargazers_count", 0) or 0,
+                        forks=repo.get("forks_count", 0) or 0,
+                    ),
+                )
+
         exploits = sorted(
             candidates.values(), key=lambda x: (x.stars or 0, x.forks or 0), reverse=True
         )
@@ -195,6 +282,30 @@ class GitHubClient:
             logger.debug("TrickestCVE lookup failed for %s", cve_id)
             return []
         return self._parse_trickest_md(text) if text else []
+
+    def _fetch_github_search(self, cve_id: str) -> list[dict[str, Any]]:
+        """Search GitHub repositories by CVE id (recall fallback).
+
+        Used only when Nomi-sec and TrickestCVE produced no candidates.
+        ``RateLimitError`` / ``OfflineError`` propagate so throttling is never
+        reported as "no PoCs found".
+        """
+        url = f"{GITHUB_API_BASE}/search/repositories"
+        try:
+            data = self._client.get_json(
+                url,
+                headers=settings.github_headers,
+                params={"q": cve_id, "per_page": _SEARCH_PER_PAGE},
+            )
+        except (RateLimitError, OfflineError):
+            raise
+        except HTTPError:
+            logger.debug("GitHub Search lookup failed for %s", cve_id)
+            return []
+        if not isinstance(data, dict):
+            return []
+        items = data.get("items")
+        return items if isinstance(items, list) else []
 
     def _enrich(self, exploit: Exploit) -> Exploit:
         """Fill in language (and any missing metadata) from the GitHub API."""

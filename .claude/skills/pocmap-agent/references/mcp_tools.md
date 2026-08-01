@@ -154,13 +154,14 @@ exploitation-first), each `{technique_id, name, mapping_type, comment, url, refe
 > `rate_limited` (throttled — retry, or set `GITHUB_API_TOKEN`), or `error` (network/HTTP
 > failure). An empty `pocs` with `status: "rate_limited"` means *unknown*, not *none*.
 >
-> Results union the Nomi-sec and TrickestCVE indexes, deduped, aggregator repos filtered.
-> **Trust the order**: sorting happens *before* metadata enrichment, so Trickest-only
-> entries (which arrive with no star/language data) always sort last regardless of their
-> true popularity — treat a trailing entry with `stars: null`/`language: null` as an
-> unverified lead, not a known PoC. `limit` is also applied before enrichment, which costs
-> one GitHub API call per repo against an unauthenticated budget of 60/hour; request only
-> what you will use.
+> Results union the **Nomi-sec** and **TrickestCVE** indexes (deduped; aggregator repos
+> filtered). When **both indexes are empty**, GitHub Search (`/search/repositories?q=<CVE>`)
+> runs as a recall fallback so index lag is not reported as "no PoCs". PoC-like URLs from
+> the CVE's own references (repo path contains the CVE id, or poc/exploit-named repos that
+> mention the CVE) are merged in as well. **Trust the order**: sorting happens *before*
+> metadata enrichment, so Trickest-only entries (no star/language data) sort last — treat a
+> trailing `stars: null`/`language: null` as an unverified lead. `limit` is applied before
+> enrichment (one GitHub API call per repo; unauthenticated budget 60/hour).
 ### find_metasploit_module
 **Purpose**: Find a Metasploit module for a CVE.
 **When to use**: When you need a tested exploit framework module with payloads and auxiliary capabilities.

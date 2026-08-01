@@ -166,4 +166,17 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, clarifying questions come before implementation rather than after mistakes, and the repo does not accumulate low-value tests.
 
+## Learned User Preferences
+
+- When a known issue is clearly large or important, address it in the current pass rather than parking it for later.
+- Prefer the smallest change that delivers the sought result; avoid extra packaging splits or restructures unless necessary.
+- Prefer verifying MCP and CLI with multiple real use-case runs (including light stress of live paths), not only offline/unit tests.
+
+## Learned Workspace Facts
+
+- Published PyPI package is `pocmap`; recommended MCP launch is `uvx --from pocmap[server] pocmap-mcp` (CLI entry `pocmap` is separate from the MCP entry).
+- Canonical MCP/agent tool contract is `.claude/skills/pocmap-agent/references/mcp_tools.md`; CLAUDE.md, README, and skills should point there and stay aligned with the live server (dict/`structuredContent` returns, current tool inventory, SDK naming).
+- For agent workflows, prefer MCP tools over the CLI when a unified response shape matters.
+- Product priority for exploit/PoC discovery: maximize recall through MCP so researchers do not need to hunt GitHub or other sources manually.
+
 @README.md - Info about Project
