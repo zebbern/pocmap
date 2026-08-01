@@ -2,7 +2,9 @@
 
 PocMap is an AI-friendly CVE / PoC / exploit-discovery toolkit (CLI + MCP server + Python API).
 This file covers how to **develop** the project. For how AI agents **consume** the MCP tools, see
-`AGENTS.md`. For full usage/API docs, see `README.md`.
+`.claude/skills/pocmap-agent/references/mcp_tools.md` (canonical MCP/agent guide; also
+`.claude/skills/pocmap-agent/SKILL.md`). `AGENTS.md` holds general agent guidelines, not the
+MCP tool contract. For full usage/API docs, see `README.md`.
 
 ## Knowledge Freshness & Research Preferences (IMPORTANT!)
 

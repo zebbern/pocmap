@@ -133,6 +133,13 @@ def _build_html_report(
         "    .score-value { font-size: 1.5em; font-weight: bold; }",
         "    .poc-badge { background: #4caf50; color: white; padding: 0.1em 0.4em; border-radius: 3px; font-size: 0.8em; }",
         "    .lab-box { background: #e3f2fd; padding: 0.5em 1em; border-radius: 4px; margin: 0.3em 0; }",
+        "    .source-status-list { list-style: none; padding: 0; margin: 0.5em 0; }",
+        "    .source-status-list li { padding: 0.35em 0; color: #444; font-size: 0.95em; }",
+        "    .source-status { font-weight: bold; }",
+        "    .source-status-ok { color: #2e7d32; }",
+        "    .source-status-empty { color: #616161; }",
+        "    .source-status-rate_limited { color: #ef6c00; }",
+        "    .source-status-error { color: #c62828; }",
         "  </style>",
         "</head>",
         "<body>",
@@ -202,6 +209,26 @@ def _build_html_report(
                 )
                 parts.append('        </div>')
             parts.append('      </div>')
+
+        # Per-source fetch status — empty ≠ rate-limited ≠ error (no silent miss).
+        sources = entry.get("sources") or []
+        if sources:
+            parts.append('      <div class="section">')
+            parts.append('        <h3>Source Status</h3>')
+            parts.append('        <ul class="source-status-list">')
+            for src in sources:
+                name = html.escape(str(src.get("source", "?")))
+                status = html.escape(str(src.get("status", "?")))
+                count = src.get("count")
+                count_s = f" · count {html.escape(str(count))}" if count is not None else ""
+                detail = src.get("detail")
+                detail_s = f" — {html.escape(str(detail))}" if detail else ""
+                parts.append(
+                    f'          <li><span class="source-status source-status-{status}">'
+                    f"{name}: {status}</span>{count_s}{detail_s}</li>"
+                )
+            parts.append("        </ul>")
+            parts.append("      </div>")
 
         # Labs
         if entry["labs"]:
@@ -572,6 +599,52 @@ class ServiceAdapter:
 
     # -- Report Generation --
 
+    def _collect_report_entry(
+        self, cve_id: str
+    ) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+        """Build one report entry using the same exploit collection as ReportService.
+
+        Uses :meth:`ExploitService.find_exploits_with_status` so third-party
+        plugins appear and per-source health is never a silent empty. Returns
+        ``(entry, None)`` on success or ``(None, error)`` when CVE lookup fails.
+        """
+        cve_info = self.lookup_cve(cve_id)
+        if "error" in cve_info:
+            return None, {
+                "cve_id": str(cve_info.get("cve_id", cve_id)),
+                "error": str(cve_info["error"]),
+            }
+
+        # Same aggregation path as ReportService.generate_report (find_exploits),
+        # but with per-source status so agents can tell empty from rate-limited.
+        try:
+            exploit_result = self._exploit.find_exploits_with_status(cve_id)
+            exploits = [self._normalize_exploit(e) for e in exploit_result.exploits]
+            sources = [s.to_dict() for s in exploit_result.sources]
+        except Exception as e:
+            if is_programming_error(e):
+                raise
+            if isinstance(e, HTTPError):
+                raise
+            logger.warning("Exploit collection failed for %s: %s", cve_id, e)
+            exploits = []
+            sources = [{
+                "source": "all",
+                "status": "error",
+                "count": 0,
+                "retryable": False,
+                "category": "unknown",
+                "detail": f"Exploit collection failed ({type(e).__name__})",
+            }]
+
+        return {
+            "cve_info": cve_info,
+            "exploits": exploits,
+            "labs": self.find_labs(cve_id),
+            "bb_reports": self.find_bug_bounty_reports(cve_id),
+            "sources": sources,
+        }, None
+
     def generate_json_report(self, cve_ids: list[str]) -> dict[str, Any]:
         """Generate JSON report for CVE IDs."""
         if len(cve_ids) > MAX_CVE_BULK:
@@ -582,31 +655,14 @@ class ServiceAdapter:
         entries: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
         for cve_id in cve_ids:
-            cve_info = self.lookup_cve(cve_id)
-            if "error" in cve_info:
-                errors.append({
-                    "cve_id": cve_info.get("cve_id", cve_id),
-                    "error": cve_info["error"],
-                })
+            entry, err = self._collect_report_entry(cve_id)
+            if err is not None:
+                errors.append(err)
                 continue
-            github = self.find_github_pocs(cve_id)
-            msf = self.find_metasploit_module(cve_id)
-            edb = self.find_exploitdb_entry(cve_id)
-            nuc = self.find_nuclei_template(cve_id)
-            exploits = github
-            for e in [msf, edb, nuc]:
-                if e:
-                    exploits.append(e)
-            bb_reports = self.find_bug_bounty_reports(cve_id)
-            labs = self.find_labs(cve_id)
-            entries.append({
-                "cve_info": cve_info,
-                "exploits": exploits,
-                "labs": labs,
-                "bb_reports": bb_reports,
-            })
+            if entry is not None:
+                entries.append(entry)
 
-        report = {
+        return {
             "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
             "total_requested": len(cve_ids),
             "total_entries": len(entries),
@@ -614,7 +670,6 @@ class ServiceAdapter:
             "entries": entries,
             "errors": errors,
         }
-        return report
 
     def generate_html_report(self, cve_ids: list[str]) -> dict[str, Any]:
         """Generate HTML report for CVE IDs."""
@@ -625,33 +680,15 @@ class ServiceAdapter:
             }
         now = datetime.now(timezone.utc)
 
-        # Gather all data
         entries: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
         for cve_id in cve_ids:
-            cve_info = self.lookup_cve(cve_id)
-            if "error" in cve_info:
-                errors.append({
-                    "cve_id": cve_info.get("cve_id", cve_id),
-                    "error": cve_info["error"],
-                })
+            entry, err = self._collect_report_entry(cve_id)
+            if err is not None:
+                errors.append(err)
                 continue
-            github = self.find_github_pocs(cve_id)
-            msf = self.find_metasploit_module(cve_id)
-            edb = self.find_exploitdb_entry(cve_id)
-            nuc = self.find_nuclei_template(cve_id)
-            exploits = github
-            for e in [msf, edb, nuc]:
-                if e:
-                    exploits.append(e)
-            bb_reports = self.find_bug_bounty_reports(cve_id)
-            labs = self.find_labs(cve_id)
-            entries.append({
-                "cve_info": cve_info,
-                "exploits": exploits,
-                "labs": labs,
-                "bb_reports": bb_reports,
-            })
+            if entry is not None:
+                entries.append(entry)
 
         html_output = _build_html_report(entries, errors, cve_ids, now)
         return {
@@ -918,14 +955,47 @@ class ServiceAdapter:
 
     @staticmethod
     def _normalize_recent_result(r: Any) -> dict[str, Any]:
-        """Convert a RecentExploitResult to a JSON-serializable dict."""
-        if hasattr(r, "model_dump"):
-            return cast("dict[str, Any]", r.model_dump(mode="json"))
-        if hasattr(r, "to_dict"):
-            return cast("dict[str, Any]", r.to_dict())
+        """Convert a RecentExploitResult to a JSON-serializable dict.
+
+        ``cve_info`` goes through :meth:`_normalize_cve_info` so agents see the
+        same shape as ``lookup_cve`` / ``generate_json_report`` (``cvss.score``,
+        ``epss_score`` 0.0–1.0, ``references`` as a list) — not the raw model
+        dump (``cvss.base_score``, ``epss`` 0–100).
+        """
         if isinstance(r, dict):
-            return r
-        return dict(r)
+            cve_raw = r.get("cve_info")
+            poc_sources = r.get("poc_sources") or []
+            return {
+                "cve_info": (
+                    ServiceAdapter._normalize_cve_info(cve_raw)
+                    if cve_raw is not None
+                    else {}
+                ),
+                "has_poc": bool(r.get("has_poc", False)),
+                "poc_sources": [
+                    ServiceAdapter._enum_val(s, str(s)) for s in poc_sources
+                ],
+                "discovered_at": r.get("discovered_at"),
+            }
+
+        cve_raw = getattr(r, "cve_info", None)
+        poc_sources = getattr(r, "poc_sources", None) or []
+        discovered = getattr(r, "discovered_at", None)
+        if hasattr(discovered, "isoformat"):
+            discovered = discovered.isoformat()
+
+        return {
+            "cve_info": (
+                ServiceAdapter._normalize_cve_info(cve_raw)
+                if cve_raw is not None
+                else {}
+            ),
+            "has_poc": bool(getattr(r, "has_poc", False)),
+            "poc_sources": [
+                ServiceAdapter._enum_val(s, str(s)) for s in poc_sources
+            ],
+            "discovered_at": discovered,
+        }
 
     @staticmethod
     def _normalize_discovery_result(r: Any) -> dict[str, Any]:
@@ -1124,8 +1194,9 @@ def _tool(
     declared fields with defaults — so a per-tool model would stamp
     ``total_count: 0`` onto a throttled lookup, turning "could not answer" into
     "no results". :mod:`pocmap.models` exports 13 JSON Schemas describing the
-    nested payloads for callers who want them, and ``AGENTS.md`` documents each
-    tool's keys; neither costs the error envelope its honesty.
+    nested payloads for callers who want them, and the pocmap-agent skill
+    (``mcp_tools.md``) documents each tool's keys; neither costs the error
+    envelope its honesty.
     """
     register: Callable[[_ToolFn], _ToolFn] = mcp.tool(
         name=name, description=description, annotations=annotations
@@ -1984,8 +2055,9 @@ def discover_package_cves(
         "ExploitDB and Nuclei, practice labs, and bug bounty reports. "
         "Prefer this over calling lookup_cve + find_github_pocs + find_metasploit_module + "
         "find_nuclei_template + check_kev_status + find_bug_bounty_reports + "
-        "find_practice_labs separately — it is one round trip instead of seven, and the "
-        "sources are fetched concurrently server-side. "
+        "find_practice_labs separately — it is one round trip instead of seven. "
+        "Each entry includes a sources block (per-source ok/empty/rate_limited/error) so an "
+        "empty exploit list is never a silent negative. "
         "Accepts comma-separated IDs, so it also answers 'compare/prioritize these CVEs' "
         "in one call. Reach for the single-purpose tools afterwards only to drill into a "
         "specific source. Also suitable for automation, CI/CD, and dashboards."
@@ -2002,9 +2074,9 @@ def generate_json_report(cve_ids: str) -> dict[str, Any]:
 
     Returns:
         JSON-formatted vulnerability report containing for each CVE:
-        cve_info (description, CVSS, EPSS, KEV), exploits (GitHub PoCs,
-        Metasploit, ExploitDB, Nuclei), labs, and bug bounty reports.
-        The top-level object also includes generated_at timestamp,
+        cve_info (description, CVSS, EPSS, KEV), exploits (all registered
+        sources including plugins), labs, bug bounty reports, and a sources
+        health block. The top-level object also includes generated_at,
         total_requested, total_entries, and any errors encountered.
     """
     try:

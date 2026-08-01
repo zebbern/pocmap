@@ -75,27 +75,28 @@
       "input_schema": {
         "cve_id": "string - The CVE identifier (e.g. 'CVE-2021-44228')"
       },
-      "output_schema": "string - Formatted CVE information text"
+      "output_schema": "object - Normalized CVE details (id, cvss.score, epss_score 0-1, kev_status, ...)"
     },
     "get_epss_score": {
       "description": "Get the EPSS probability score for a CVE",
       "input_schema": {
         "cve_id": "string - The CVE identifier"
       },
-      "output_schema": "string - EPSS score with risk level"
+      "output_schema": "object - {cve_id, epss_score (0-1), risk_level, available, interpretation}"
     },
     "check_kev_status": {
       "description": "Check if a CVE is in the CISA KEV catalog",
       "input_schema": {
         "cve_id": "string - The CVE identifier"
       },
-      "output_schema": "string - KEV catalog status"
+      "output_schema": "object - {cve_id, kev_status, in_kev_catalog, description, recommendation}"
     },
     "get_attack_techniques": {
       "description": "MITRE ATT&CK techniques a CVE maps to, curated by the Center for Threat-Informed Defense over the CISA KEV catalogue. Read mapping_type: exploitation_technique is how the CVE itself is exploited; primary_impact/secondary_impact are what follows. Most CVEs have no curated mapping, so total_count 0 means 'no mapping exists', NOT 'harmless'.",
       "input_schema": {
         "cve_id": "string - CVE identifier (e.g. 'CVE-2021-44228')"
-      }
+      },
+      "output_schema": "object - {cve_id, total_count, coverage_note, techniques[]}"
     },
     "find_github_pocs": {
       "description": "Find GitHub PoC repositories for a CVE",
@@ -103,14 +104,15 @@
         "cve_id": "string - The CVE identifier",
         "limit": "integer - Max results (default: 10)"
       },
-      "output_schema": "string - Formatted list of GitHub PoCs"
+      "output_schema": "object - {cve_id, total_count, pocs[], sources[]}"
     },
     "verify_github_pocs": {
       "description": "Read the SOURCE of the top GitHub PoC repos for a CVE and score whether each really exploits it: confirmed (names the CVE in code AND ships code), likely (a writeup), unverified (has code but never names this CVE), unrelated (a link index). Requires the operator to set POCMAP_ALLOW_FETCH_POC_SOURCE=1, since it writes third-party exploit code to disk; returns a 'not_enabled' error otherwise.",
       "input_schema": {
         "cve_id": "string - CVE identifier (e.g. 'CVE-2021-44228')",
         "limit": "integer - how many top-ranked PoCs to fetch and score, 1-20 (default 5)"
-      }
+      },
+      "output_schema": "object - {cve_id, total_count, results[]} or not_enabled error envelope"
     },
     "find_metasploit_module": {
       "description": "Find a Metasploit module for a CVE",
@@ -118,7 +120,7 @@
         "cve_id": "string - The CVE identifier",
         "limit": "integer - How many entries OF THAT SOURCE to consider (1-10, default: 1); at most one is returned"
       },
-      "output_schema": "string - Metasploit module info or not-found message"
+      "output_schema": "object - {cve_id, found, module|null, note}"
     },
     "find_exploitdb_entry": {
       "description": "Find an ExploitDB entry for a CVE",
@@ -126,7 +128,7 @@
         "cve_id": "string - The CVE identifier",
         "limit": "integer - How many entries OF THAT SOURCE to consider (1-10, default: 1); at most one is returned"
       },
-      "output_schema": "string - ExploitDB entry info or not-found message"
+      "output_schema": "object - {cve_id, found, entry|null, note}"
     },
     "find_nuclei_template": {
       "description": "Find a Nuclei vulnerability scanner template for a CVE",
@@ -134,56 +136,56 @@
         "cve_id": "string - The CVE identifier",
         "limit": "integer - How many entries OF THAT SOURCE to consider (1-10, default: 1); at most one is returned"
       },
-      "output_schema": "string - Nuclei template info or not-found message"
+      "output_schema": "object - {cve_id, found, template|null, note}"
     },
     "find_bug_bounty_reports": {
       "description": "Find bug bounty reports and write-ups for a CVE",
       "input_schema": {
         "cve_id": "string - The CVE identifier"
       },
-      "output_schema": "string - Formatted list of bug bounty reports"
+      "output_schema": "object - {cve_id, total_count, reports[]}"
     },
     "find_practice_labs": {
       "description": "Find CTF labs and practice environments for a CVE",
       "input_schema": {
         "cve_id": "string - The CVE identifier"
       },
-      "output_schema": "string - Formatted list of lab environments"
+      "output_schema": "object - {cve_id, total_count, labs[]}"
     },
     "find_vulhub_docker": {
       "description": "Find a Vulhub Docker environment for a CVE",
       "input_schema": {
         "cve_id": "string - The CVE identifier"
       },
-      "output_schema": "string - Vulhub Docker URL and setup instructions"
+      "output_schema": "object - {cve_id, found, url|null, setup_instructions?}"
     },
     "cve_to_cpe": {
       "description": "Convert a CVE to its associated CPEs",
       "input_schema": {
         "cve_id": "string - The CVE identifier"
       },
-      "output_schema": "string - Formatted list of CPE information"
+      "output_schema": "object - {cve_id, total_count, cpes[]}"
     },
     "cpe_to_cve": {
       "description": "Convert a CPE to its associated CVEs",
       "input_schema": {
         "cpe": "string - CPE 2.3 URI or simplified product identifier"
       },
-      "output_schema": "string - Formatted list of CVE identifiers"
+      "output_schema": "object - {cpe, total_count, cve_ids[]}"
     },
     "generate_json_report": {
       "description": "Generate a comprehensive JSON vulnerability report for one or more CVEs",
       "input_schema": {
         "cve_ids": "string - Comma-separated list of CVE identifiers"
       },
-      "output_schema": "string - JSON-formatted vulnerability report"
+      "output_schema": "object - {generated_at, total_*, entries[{cve_info,exploits,labs,bb_reports,sources}], errors[]}"
     },
     "generate_html_report": {
       "description": "Generate a comprehensive HTML vulnerability report for one or more CVEs",
       "input_schema": {
         "cve_ids": "string - Comma-separated list of CVE identifiers"
       },
-      "output_schema": "string - HTML-formatted vulnerability report"
+      "output_schema": "object - {format:html, content, cve_count, status}"
     },
     "discover_product_cves": {
       "description": "Discover CVEs affecting a product by name and version. Resolves the product to canonical vendor:product CPEs via the NVD CPE dictionary, then matches CVEs by CPE applicability with the version constraint evaluated by NVD; falls back to keyword search only if unresolvable.",
@@ -193,7 +195,7 @@
         "vendor": "string - Optional vendor name for disambiguation",
         "limit": "integer - Max CVEs to analyze (default: 50)"
       },
-      "output_schema": "string - CVEs grouped into confirmed/possibly-affected/not-enough-data, plus search_sources (nvd_cpe_match = authoritative, nvd_keyword_search = degraded full-text fallback) and matched_cpes"
+      "output_schema": "object - {confirmed_affected, possibly_affected, not_enough_data, search_sources, matched_cpes, summary}"
     },
     "discover_package_cves": {
       "description": "Find vulnerabilities in a software PACKAGE (a dependency) and the exact releases that fix them. Use for lockfiles/SBOMs (requirements.txt, package.json, pom.xml, go.mod, Gemfile, Cargo.toml). The only pocmap tool returning fixed versions; it cannot answer questions about deployed products like nginx or Confluence (use discover_product_cves). Backed by OSV.dev (no API key) and enriched with EPSS + CISA KEV, ranked KEV > EPSS > CVSS.",
@@ -202,7 +204,8 @@
         "name": "string - package name; Maven needs the full 'groupId:artifactId'",
         "version": "string - installed version, e.g. '3.2.0' (optional but strongly recommended)",
         "limit": "integer - max advisories to return, 1-500 (default 50)"
-      }
+      },
+      "output_schema": "object - Package advisories with fixed versions, EPSS/KEV enrichment"
     },
     "find_recent_exploits": {
       "description": "Discover recently published CVEs with exploit intelligence and filters",
@@ -217,22 +220,22 @@
         "sort": "string - Sort by cve_date, severity, or epss",
         "limit": "integer - Max results (default: 50)"
       },
-      "output_schema": "string - JSON list of recent CVEs with metadata"
+      "output_schema": "object - {success, total, query, cves[{cve_info (normalized), has_poc, poc_sources, discovered_at}]}"
     },
     "get_cve_assessment_playbook": {
       "description": "Retrieve the structured CVE assessment playbook",
       "input_schema": {},
-      "output_schema": "string - JSON playbook with phases and steps"
+      "output_schema": "object - Playbook JSON with phases and steps"
     },
     "get_rapid_response_playbook": {
       "description": "Retrieve the rapid-response playbook for critical/zero-day CVEs",
       "input_schema": {},
-      "output_schema": "string - JSON playbook with phases and steps"
+      "output_schema": "object - Playbook JSON with phases and steps"
     },
     "get_bug_bounty_playbook": {
       "description": "Retrieve the bug bounty submission playbook",
       "input_schema": {},
-      "output_schema": "string - JSON playbook with phases and steps"
+      "output_schema": "object - Playbook JSON with phases and steps"
     }
   },
   "prompts": {

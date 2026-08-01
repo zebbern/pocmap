@@ -887,6 +887,10 @@ GitHub Actions job that runs the gate and uploads the SARIF to code scanning, an
 
 PocMap includes a full MCP (Model Context Protocol) server exposing 22 AI-native tools for integration with Claude Desktop, Cursor, and other MCP-compatible clients.
 
+**Canonical MCP / agent consumption guide:** [`.claude/skills/pocmap-agent/references/mcp_tools.md`](.claude/skills/pocmap-agent/references/mcp_tools.md)
+(parameters, return shapes, EPSS scales, error envelopes). Skill overview:
+[`.claude/skills/pocmap-agent/SKILL.md`](.claude/skills/pocmap-agent/SKILL.md).
+
 ### MCP Server Setup for Claude Desktop
 
 Recommended: [`uv`](https://github.com/astral-sh/uv) on `PATH`, no local clone required.
@@ -1054,7 +1058,7 @@ Use these schemas for:
 ```
 +------------------+     +------------------+     +------------------+
 |     CLI Layer    |     |   MCP Server     |     |   Python API     |
-|   (Typer/Rich)   |     |  (MCP SDK / 21   |     |   (Services)     |
+|   (Typer/Rich)   |     |  (MCP SDK / 22   |     |   (Services)     |
 +------------------+     |     Tools)       |     +------------------+
          |               +------------------+             |
          |                         |                      |

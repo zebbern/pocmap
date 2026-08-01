@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from pocmap.bugbounty.scope_manager import ScopeManager
+from pocmap.services.recent_service import RecentService
 from pocmap.utils.compat import get_value as _get_value
 from pocmap.utils.http import HTTPClient, is_safe_url
 
@@ -108,8 +109,8 @@ def _get_cve_value(obj: Any, key: str, default: Any = None) -> Any:
     models (e.g. ``id``, ``cvss``).
 
     For the ``cvss`` / ``cvss_score`` keys, nested
-    :class:`~pocmap.models.CVSSScore` models are automatically
-    unwrapped to return the scalar ``base_score``.
+    :class:`~pocmap.models.CVSSScore` models and ``model_dump`` dicts
+    with a ``base_score`` key are unwrapped to the scalar score.
     """
     if obj is None:
         return default
@@ -122,11 +123,15 @@ def _get_cve_value(obj: Any, key: str, default: Any = None) -> Any:
     if val is None or (callable(val) and attr_name != key):
         return default
 
-    # Unwrap nested CVSSScore -> base_score when the caller
-    # asked for a scalar cvss/cvss_score value.
+    # Unwrap nested CVSSScore / model_dump dict -> base_score when the
+    # caller asked for a scalar cvss/cvss_score value. RecentService path
+    # feeds CVEInfo.model_dump() where cvss is {"base_score": ...}.
     if attr_name == "cvss" and key in ("cvss", "cvss_score"):
         if val is not None and hasattr(val, "base_score"):
             return val.base_score
+        if isinstance(val, dict) and "base_score" in val:
+            score = val.get("base_score")
+            return score if score is not None else default
         return val if val is not None else default
 
     return val if val is not None else default
@@ -530,17 +535,31 @@ high-impact CVEs are discovered that match the scope.
         return alerts
 
     def _fetch_recent_cves(self) -> list[dict[str, Any]]:
-        """
-        Fetch recent CVEs from available sources.
+        """Fetch recently published CVEs via :class:`RecentService`.
 
-        This is a placeholder that returns an empty list.
-        In production, integrate with:
-        - NVD API (nvd_client.get_recent())
-        - CISA KEV feed
-        - pocmap.clients.cveorg_client for CVE.org data
+        Returns CVEInfo-shaped dicts (``id``, ``product``, ``cvss``, …) suitable
+        for :meth:`ScopeManager.match_cves_to_scope`. A successful empty window
+        yields ``[]``; network/API failures raise so monitoring never pretends
+        "no new CVEs" when the fetch never ran.
         """
-        # Placeholder - should be implemented with actual CVE source
-        return []
+        try:
+            with RecentService() as svc:
+                results = svc.find_recent_cves(since="24h", limit=50)
+        except Exception as exc:
+            logger.error("ScopeMonitor CVE fetch failed: %s", exc)
+            raise RuntimeError(
+                f"ScopeMonitor could not fetch recent CVEs "
+                f"({type(exc).__name__}: {exc})"
+            ) from exc
+
+        out: list[dict[str, Any]] = []
+        for result in results:
+            info = result.cve_info
+            if hasattr(info, "model_dump"):
+                out.append(info.model_dump(mode="json"))
+            else:
+                out.append(dict(info))
+        return out
 
     def _send_alerts(self, cves: list[dict[str, Any]]) -> None:
         """Send alert notifications via configured webhooks."""

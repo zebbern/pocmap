@@ -3,7 +3,7 @@ name: agent-docs-consistency
 description: >
   Cross-checks pocmap's agent-facing documentation against the real code so the
   MCP tool contract stays truthful. Use after adding/renaming/removing an MCP tool
-  or CLI command, changing a tool signature, or editing AGENTS.md, mcp_config.json,
+  or CLI command, changing a tool signature, or editing mcp_config.json,
   or the pocmap-agent skill. Reports drift between the four surfaces.
 tools: Read, Grep, Glob
 ---
@@ -25,10 +25,12 @@ as suspect until confirmed against source.
 
 ## The documents to check against source
 1. `mcp_config.json` (repo root) — tool/resource/prompt catalog.
-2. `AGENTS.md` (repo root) — agent integration guide.
-3. `.claude/skills/pocmap-agent/SKILL.md` and its `references/mcp_tools.md`,
-   `references/cli_commands.md`.
+2. `.claude/skills/pocmap-agent/references/mcp_tools.md` — **canonical MCP/agent
+   consumption guide** (parameters, return shapes, error envelopes).
+3. `.claude/skills/pocmap-agent/SKILL.md` and `references/cli_commands.md`.
 4. `README.md` — usage/API docs.
+5. `AGENTS.md` (repo root) — general agent guidelines only; it is **not** the MCP
+   tool contract. Flag any claim that still treats it as the MCP integration guide.
 
 ## What to check
 - **Tool inventory:** every tool named in the docs exists in `src/pocmap/mcp_server.py` with

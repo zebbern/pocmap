@@ -1,23 +1,28 @@
 # PocMap MCP Tools Reference
 
-All 22 MCP tools for vulnerability research, exploit discovery, and report generation.
+All **22** MCP tools for vulnerability research, exploit discovery, and report generation.
+This file is the **canonical MCP / agent consumption guide** (not `AGENTS.md`).
 
 **Start the server:** `uvx --from pocmap[server] pocmap-mcp` (or installed `pocmap-mcp` /
-`python -m pocmap.mcp_server`). Implementation: `src/pocmap/mcp_server.py`.
+`python -m pocmap.mcp_server`). Implementation: `src/pocmap/mcp_server.py`
+(`mcp.server.mcpserver.MCPServer`, mcp SDK 2.x). Tools return **dicts**
+(`structuredContent`), not JSON strings.
 
 Common types: **Exploit**=`{source,url,title,language,stars,forks,rank,command}`
 (`language`/`stars`/`forks` are `null` for every non-GitHub source; `rank` is set only
 for Metasploit; `command` is set only for the Metasploit/ExploitDB/Nuclei sources);
 **BugBountyReport**=`{source,url,has_poc,title}`; **LabEnvironment**=`{platform,name,url}`;
-**ReportEntry**=`{cve_info,exploits,labs,bb_reports}`;
+**SourceStatus**=`{source,status,count,retryable[,category,detail]}` —
+`status` ∈ `ok|empty|rate_limited|error`;
+**ReportEntry**=`{cve_info,exploits,labs,bb_reports,sources}`;
 **RecentExploitResult**=`{cve_info,has_poc,poc_sources,discovered_at}`.
 
-> **Two different CVE shapes.** Most tools (`lookup_cve`, `discover_product_cves`, and
-> the `cve_info` inside `generate_json_report` entries) go through the MCP normalizer:
-> `cvss.score`, `epss_score` on a **0.0-1.0** scale, `references` as a **list**.
-> `find_recent_exploits` is the exception — its `cve_info` is the raw model dump, using
-> `cvss.base_score`, `epss` on a **0-100** scale, `references` as a **name->URL object**,
-> plus `affected_cpes`/`cpe_matches`. Check which one you are holding before reading a score.
+> **Normalized CVE shape (all MCP CVE payloads).** `lookup_cve`,
+> `discover_product_cves`, `generate_json_report` entries, and
+> `find_recent_exploits` `cve_info` all use the MCP normalizer: `cvss.score`,
+> `epss_score` on a **0.0–1.0** scale, `references` as a **list**, plus
+> `affected_products`. The `min_epss` *filter* on `find_recent_exploits` stays
+> on the **0–100** scale (input only).
 
 ---
 ## Core CVE Tools
@@ -272,20 +277,18 @@ is the nuclei invocation (`null` when the template path is unknown).
 
 ### generate_json_report
 **Purpose**: Everything known about one or more CVEs, in a single call.
-**When to use**: **Default entry point for any question about known CVE IDs.** Returns what
-`lookup_cve` + `find_github_pocs` + `find_metasploit_module` + `find_nuclei_template` +
-`check_kev_status` + `find_bug_bounty_reports` + `find_practice_labs` return — one round
-trip instead of seven, with the sources fetched concurrently server-side. Takes
-comma-separated IDs, so "prioritize these N CVEs" is also one call. Reach for the
-single-purpose tools only to drill into one source afterwards. Also suitable for
-dashboards and programmatic processing.
+**When to use**: **Default entry point for any question about known CVE IDs.** One round
+trip covering CVE details, all registered exploit sources (built-ins + plugins), labs,
+and bug bounty reports. Takes comma-separated IDs for compare/prioritize. Drill into a
+single-purpose tool afterwards only when you need one source in isolation.
 **Parameters**:
 - `cve_ids` (str, required): Comma-separated CVE IDs, e.g. `"CVE-2021-44228,CVE-2021-45046"`
 **Returns**: JSON with `generated_at`, `total_requested`, `total_entries`, `total_errors`,
 `entries` (list of **ReportEntry**), and `errors` (list of `{cve_id, error}` for CVEs whose
-lookup failed). Each entry is `{cve_info, exploits, labs, bb_reports}` — the CVE fields are
-nested under `cve_info` (normalizer shape: `cvss.score`, `epss_score` 0.0-1.0), not flattened.
-`exploits` merges the GitHub PoCs with the Metasploit/ExploitDB/Nuclei entries.
+lookup failed). Each entry is `{cve_info, exploits, labs, bb_reports, sources}` —
+normalized `cve_info` (`cvss.score`, `epss_score` 0.0–1.0); `exploits` from
+`ExploitService.find_exploits_with_status` (includes plugins); **always read `sources`**
+before treating an empty exploit list as "none found".
 **Example**:
 ```json
 {"generated_at": "2024-01-15T09:30:00Z", "total_requested": 1,
@@ -297,10 +300,13 @@ nested under `cve_info` (normalizer shape: `cvss.score`, `epss_score` 0.0-1.0), 
      "epss_score": 0.975, "kev_status": true, "cwes": ["CWE-20"],
      "references": [], "vendor": "Apache", "product": "Log4j2",
      "affected_products": [], "publication_date": "2021-12-10", "state": "PUBLISHED"},
-   "exploits": [], "labs": [], "bb_reports": []}],
+   "exploits": [], "labs": [], "bb_reports": [],
+   "sources": [{"source": "github", "status": "ok", "count": 0, "retryable": false},
+    {"source": "db", "status": "empty", "count": 0, "retryable": false}]}],
  "errors": []}
 ```
 > **Note**: more than 100 CVEs returns `{"error": ..., "category": "invalid_input"}`.
+> Collection is sequential server-side (not concurrent).
 ### generate_html_report
 **Purpose**: Generate a styled HTML report for multiple CVEs.
 **When to use**: When you need a human-readable, shareable report for stakeholders.
@@ -343,21 +349,19 @@ parameters), and `cves` (list of **RecentExploitResult**). There is no `results`
   "severity": ["CRITICAL"], "sort": "cve_date", "limit": 50},
  "cves": [{
    "cve_info": {"id": "CVE-2024-1234", "description": "RCE in...",
-     "cvss": {"version": "3.1", "base_score": 8.8, "severity": "HIGH",
+     "cvss": {"version": "3.1", "score": 8.8, "severity": "HIGH",
       "vector_string": "CVSS:3.1/AV:N/..."},
-     "epss": 45.0, "kev_status": false, "cwes": [],
-     "references": {"NVD": "https://nvd.nist.gov/..."},
+     "epss_score": 0.45, "kev_status": false, "cwes": [],
+     "references": ["https://nvd.nist.gov/..."],
      "vendor": "Acme", "product": "Widget", "publication_date": "2024-01-15",
-     "state": "PUBLISHED", "affected_products": [], "affected_cpes": [],
-     "cpe_matches": []},
+     "state": "PUBLISHED", "affected_products": []},
    "has_poc": true, "poc_sources": ["github"],
    "discovered_at": "2024-01-16T09:30:00"}]}
 ```
 > **Note**: each item nests the CVE under `cve_info` — nothing is hoisted to the item's top
-> level. This `cve_info` is the **raw model dump**, so unlike `lookup_cve` it uses
-> `cvss.base_score`, `epss` on the **0-100** scale, and `references` as a name->URL object.
-> `min_epss` likewise uses the 0-100 scale (e.g. `50` = EPSS >= 50%), while
-> `get_epss_score` returns 0.0-1.0. On failure the tool returns
+> level. `cve_info` uses the **same normalizer** as `lookup_cve` (`cvss.score`,
+> `epss_score` 0.0–1.0, `references` as a list). The `min_epss` *input filter* still uses
+> the 0–100 scale (e.g. `50` = EPSS >= 50%). On failure the tool returns
 > `{"success": false, "error": ...}`.
 ### discover_package_cves
 **Purpose**: Find vulnerabilities in a software **package** (a dependency) and the exact releases that fix them.
@@ -477,26 +481,47 @@ honour `time_limit_minutes`. Extra top-level keys: `trigger_conditions`, `goal`,
 Extra top-level keys: `trigger_conditions`, `supported_platforms`,
 `report_quality_checklist`, `common_pitfalls`, `Escalation_contacts`.
 ---
-## Quick Lookup Table
+## Quick Lookup Table (22 tools)
 
 | # | Tool | Category | Required Param | Key Optional Params |
 |---|------|----------|---------------|---------------------|
 | 1 | `lookup_cve` | Core | `cve_id` | -- |
 | 2 | `check_kev_status` | Core | `cve_id` | -- |
 | 3 | `get_epss_score` | Core | `cve_id` | -- |
-| 4 | `cve_to_cpe` | Core | `cve_id` | -- |
-| 5 | `cpe_to_cve` | Core | `cpe` | -- |
-| 6 | `find_github_pocs` | Exploit | `cve_id` | `limit` (default 10) |
-| 7 | `find_metasploit_module` | Exploit | `cve_id` | `limit` (default 1) |
-| 8 | `find_exploitdb_entry` | Exploit | `cve_id` | `limit` (default 1) |
-| 9 | `find_nuclei_template` | Exploit | `cve_id` | `limit` (default 1) |
-| 10 | `find_bug_bounty_reports` | Bug Bounty | `cve_id` | -- |
-| 11 | `find_practice_labs` | Bug Bounty | `cve_id` | -- |
-| 12 | `find_vulhub_docker` | Bug Bounty | `cve_id` | -- |
-| 13 | `generate_json_report` | Report | `cve_ids` (CSV) | -- |
-| 14 | `generate_html_report` | Report | `cve_ids` (CSV) | -- |
-| 15 | `find_recent_exploits` | Discovery | -- | `since`, `only_with_poc`, `kev_only`, `min_epss` |
-| 16 | `discover_product_cves` | Discovery | `product` | `version`, `vendor` |
-| 17 | `get_cve_assessment_playbook` | Playbook | -- | -- |
-| 18 | `get_rapid_response_playbook` | Playbook | -- | -- |
-| 19 | `get_bug_bounty_playbook` | Playbook | -- | -- |
+| 4 | `get_attack_techniques` | Core | `cve_id` | -- |
+| 5 | `cve_to_cpe` | Core | `cve_id` | -- |
+| 6 | `cpe_to_cve` | Core | `cpe` | -- |
+| 7 | `find_github_pocs` | Exploit | `cve_id` | `limit` (default 10) |
+| 8 | `verify_github_pocs` | Exploit | `cve_id` | `limit` (default 5); needs opt-in env |
+| 9 | `find_metasploit_module` | Exploit | `cve_id` | `limit` (default 1) |
+| 10 | `find_exploitdb_entry` | Exploit | `cve_id` | `limit` (default 1) |
+| 11 | `find_nuclei_template` | Exploit | `cve_id` | `limit` (default 1) |
+| 12 | `find_bug_bounty_reports` | Research | `cve_id` | -- |
+| 13 | `find_practice_labs` | Labs | `cve_id` | -- |
+| 14 | `find_vulhub_docker` | Labs | `cve_id` | -- |
+| 15 | `generate_json_report` | Report | `cve_ids` (CSV) | -- |
+| 16 | `generate_html_report` | Report | `cve_ids` (CSV) | -- |
+| 17 | `find_recent_exploits` | Discovery | -- | `since`, `only_with_poc`, `kev_only`, `min_epss` |
+| 18 | `discover_product_cves` | Discovery | `product` | `version`, `vendor`, `limit` |
+| 19 | `discover_package_cves` | Discovery | `ecosystem`, `name` | `version`, `limit` |
+| 20 | `get_cve_assessment_playbook` | Playbook | -- | -- |
+| 21 | `get_rapid_response_playbook` | Playbook | -- | -- |
+| 22 | `get_bug_bounty_playbook` | Playbook | -- | -- |
+
+## Resources (3) & Prompts (3)
+
+| Kind | Name | URI / args |
+|------|------|------------|
+| Resource | `cve_info` | `cve://{cve_id}` (text) |
+| Resource | `cve_exploits` | `exploits://{cve_id}` (text) |
+| Resource | `cve_report` | `report://{cve_id}` (JSON) |
+| Prompt | `vulnerability_assessment` | `cve_id` |
+| Prompt | `exploit_research` | `cve_id`, `focus_area` |
+| Prompt | `bug_bounty_analysis` | `cve_id` |
+
+## Error envelope
+
+On failure tools return a dict with `error`, `error_type`, `category`, `retryable`,
+`context` (and never success keys like `total_count: 0` / `kev_status: false` that would
+look like a real answer). Categories: `not_found`, `rate_limited`, `offline`,
+`network_error`, `invalid_input`, `permission_error`, `not_enabled`, `unknown`.

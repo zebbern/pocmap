@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP reports no longer omit third-party exploit sources or hide fetch failures.**
+  `generate_json_report` / `generate_html_report` now collect exploits through
+  `ExploitService.find_exploits_with_status` (same aggregation as `ReportService`, plus
+  per-source `ok` / `empty` / `rate_limited` / `error`). Each entry includes a `sources`
+  block; the HTML report renders that status so an empty exploit list is never a silent
+  miss.
+- **`find_recent_exploits` `cve_info` matches `lookup_cve`.** Results go through
+  `_normalize_cve_info` (`cvss.score`, `epss_score` 0.0–1.0, `references` as a list) instead
+  of a raw model dump (`cvss.base_score`, `epss` 0–100).
+- **`ScopeMonitor` actually fetches recent CVEs.** `_fetch_recent_cves` used a placeholder
+  that always returned `[]`, so scope matching never alerted. It now uses `RecentService`
+  (`since=24h`) and raises on fetch failure instead of pretending there were no new CVEs.
+  CVSS unwrapping also accepts `model_dump` dicts with `base_score`.
+
+### Documentation
+
+- **Agent MCP contract moved out of `AGENTS.md`.** `AGENTS.md` is general agent guidelines;
+  the canonical MCP/agent consumption guide is
+  `.claude/skills/pocmap-agent/references/mcp_tools.md` (skill overview in
+  `pocmap-agent/SKILL.md`). `CLAUDE.md`, README AI section, `add-mcp-tool`, and
+  `agent-docs-consistency` retargeted accordingly.
+- **`mcp_config.json` tool `output_schema` values corrected** from legacy "string" wording
+  to structured objects (matches real `structuredContent` since 2.6.0).
+
 ## [2.6.7] - 2026-07-31
 
 An audit that verified every AGENTS.md claim by actually invoking the tools. 14 discrepancies

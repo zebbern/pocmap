@@ -13,194 +13,101 @@ description: >
 
 # PocMap Agent Skill
 
-Use the PocMap Python package to look up CVEs, find exploits and PoCs, discover
-recent vulnerabilities, map products to CVEs, analyze CPE/CVSS data, check CISA KEV
-and EPSS scores, find bug bounty reports, and locate practice lab environments.
+Use PocMap to look up CVEs, find exploits/PoCs, discover recent vulnerabilities,
+map products/packages to CVEs, check KEV/EPSS, find bug bounty reports, and locate
+practice labs.
 
-> **Accuracy note:** This skill is verified against the source in `src/pocmap/`.
-> The public Python API is **synchronous** (no `async`/`await`). If any example
-> disagrees with the code, the code in `src/pocmap/services/` and `config.py` wins.
+> **Source of truth:** `src/pocmap/` wins over this skill. The public Python API is
+> **synchronous**. Full MCP contracts live in `references/mcp_tools.md` (canonical
+> agent consumption guide). CLI flags: `references/cli_commands.md`.
 
 ## Quick Start
 
 ```bash
-pip install "pocmap[server]"   # CLI + MCP (FastMCP via [server] extra)
+pip install "pocmap[server]"   # CLI + MCP (mcp SDK 2.x / MCPServer via [server])
 # from a clone: pip install -e ".[server,dev]"
-```
 
-Run via CLI (both forms work):
-
-```bash
 pocmap lookup CVE-2021-44228
-python -m pocmap lookup CVE-2021-44228
-python -m pocmap --help      # authoritative list of all 13 commands
-```
+python -m pocmap --help        # authoritative CLI list (13 commands)
 
-Use in Python (synchronous; services are context managers):
+# MCP server (src/pocmap/mcp_server.py → pocmap-mcp)
+uvx --from pocmap[server] pocmap-mcp
+pocmap-mcp                     # after install
+python -m pocmap.mcp_server
+```
 
 ```python
 from pocmap.services import CVEService
 
 with CVEService() as svc:
     info = svc.get_cve_info("CVE-2021-44228")
-    print(info.cvss, info.epss, info.kev_status)
+    print(info.cvss, info.epss, info.kev_status)  # epss is 0–100 in the Python model
 ```
-
-Run the MCP server (implementation: `src/pocmap/mcp_server.py`, script: `pocmap-mcp`):
-
-```bash
-uvx --from pocmap[server] pocmap-mcp   # no local install (needs uv)
-pocmap-mcp                             # after pip install "pocmap[server]"
-python -m pocmap.mcp_server            # same module
-python mcp_server.py                   # repo-root launcher shim
-```
-
-## Package Architecture
-
-Layered: **CLI / MCP (presentation) → `services/` → `clients/` → `models` (pydantic)**.
-
-### Services Layer (`pocmap.services`) — real classes and methods
-
-All are synchronous; all support `with ... as svc:` and a `close()` method.
-
-| Service | Key methods (verified) |
-|---------|------------------------|
-| `CVEService` | `get_cve_info(cve_id)`, `get_cpes(cve_id)`, `get_description(cve_id)`, `cpe_to_cves(cpe)`, `validate_cve_id(cve_id)` (classmethod) |
-| `ExploitService` | `find_exploits(cve_id)`, `find_github_pocs(cve_id)`, `find_db_exploits(cve_id)`, `get_readme(repo_url)`, `filter_by_language(...)`, `sort_by_popularity(...)` |
-| `LabService` | `find_labs(cve_id)`, `search_vulhub(cve_id)`, `search_hackthebox(cve_id)` |
-| `ReportService` | `generate_report(cve_id)`, `generate_bulk_report(cve_ids)`, `generate_bulk_report_from_file(path)`, `save_json_report(...)`, `save_html_report(...)` |
-| `BugBountyService` | `find_reports(cve_id)`, `search_hackerone(cve_id)`, `search_pentesterland(cve_id)`, `search_bugbounty_hunting(cve_id)` |
-| `RecentService` | `find_recent_cves(...)` |
-| `ProductDiscoveryService` | `discover_by_product(product, version=, vendor=, limit=)`, `normalize_product(product)`, `parse_version(version)`, `search_nvd_by_cpe(pairs, version_constraint=, limit=)` (primary search path), `search_nvd_by_keyword(...)` (fallback only), `match_cves_to_product(...)` |
-| `CPEDictionaryClient` | `resolve(product, vendor_hint=, max_pairs=)` -> `list[(vendor, product)]` (NVD CPE dictionary) |
-
-### Toolkit Layer (`pocmap.bugbounty`)
-
-Checklists, methodology, prioritization (EPSS+CVSS triage), scope management,
-templates, automation (batch/monitoring/webhooks), and JSON playbooks under
-`bugbounty/playbooks/`.
 
 ## Decision Guide
 
-Pick the right MCP tool or CLI command. **All MCP tool names below are exact.**
-
-| Goal | MCP Tool | CLI Command |
-|------|----------|-------------|
-| Look up a CVE by ID | `lookup_cve` | `pocmap lookup CVE-XXXX-XXXX` |
+| Goal | MCP tool | CLI |
+|------|----------|-----|
+| **Everything about known CVE ID(s)** | **`generate_json_report`** (start here) | `pocmap lookup` / `bulk` |
+| Look up one CVE | `lookup_cve` | `pocmap lookup CVE-…` |
 | Recent CVEs / monitoring | `find_recent_exploits` | `pocmap latest --since 24h` |
-| CVEs for a product | `discover_product_cves` | `pocmap discover "Product" --version 2.x` |
-| GitHub PoCs for a CVE | `find_github_pocs` | `pocmap lookup CVE-… ` (PoCs shown) |
-| Metasploit module | `find_metasploit_module` | — |
-| ExploitDB entry | `find_exploitdb_entry` | — |
-| Nuclei template | `find_nuclei_template` | — |
-| CISA KEV status | `check_kev_status` | — |
-| **How a CVE is exploited / what to detect** | **`get_attack_techniques`** (MITRE ATT&CK; KEV coverage, empty = unmapped) | — |
-| EPSS score | `get_epss_score` | — |
-| Bug bounty reports | `find_bug_bounty_reports` | `pocmap bugbounty CVE-…` |
-| Practice labs | `find_practice_labs` | `pocmap labs CVE-…` |
-| Vulhub Docker lab | `find_vulhub_docker` | `pocmap labs CVE-…` |
-| **Verify a PoC is real** | **`verify_github_pocs`** (needs `POCMAP_ALLOW_FETCH_POC_SOURCE=1`) | — |
-| CVE → CPE | `cve_to_cpe` | `pocmap cpes CVE-…` |
-| CPE → CVEs | `cpe_to_cve` | `pocmap cpe2cve "cpe:2.3:…"` |
-| **Everything about a CVE (start here)** | **`generate_json_report`** | `pocmap lookup CVE-…` |
-| JSON report (multi-CVE) | `generate_json_report` | `pocmap bulk cves.txt` |
-| HTML report (multi-CVE) | `generate_html_report` | `pocmap bulk cves.txt` |
-| Assessment playbook | `get_cve_assessment_playbook` | — |
-| Rapid-response playbook | `get_rapid_response_playbook` | — |
-| Bug-bounty playbook | `get_bug_bounty_playbook` | — |
-| Export tool schemas | — | `pocmap schemas` |
-| Show a repo README | — | `pocmap readme <github-url>` |
+| CVEs for a deployed product | `discover_product_cves` | `pocmap discover "Product"` |
+| CVEs for a dependency / lockfile | `discover_package_cves` | — |
+| GitHub PoCs (+ `sources` health) | `find_github_pocs` | (shown in `lookup`) |
+| Metasploit / ExploitDB / Nuclei | `find_metasploit_module` / `find_exploitdb_entry` / `find_nuclei_template` | — |
+| How it is exploited (ATT&CK) | `get_attack_techniques` | — |
+| Verify PoC is real | `verify_github_pocs` (needs `POCMAP_ALLOW_FETCH_POC_SOURCE=1`) | — |
+| KEV / EPSS | `check_kev_status` / `get_epss_score` | — |
+| Bug bounty / labs | `find_bug_bounty_reports` / `find_practice_labs` / `find_vulhub_docker` | `bugbounty` / `labs` |
+| CVE ↔ CPE | `cve_to_cpe` / `cpe_to_cve` | `cpes` / `cpe2cve` |
+| HTML report | `generate_html_report` | `pocmap bulk` |
+| Playbooks | `get_*_playbook` | — |
 
 ## Key Constraints
 
-- **CVE ID format:** `CVE-YYYY-NNNN+` (4-digit year, 4+ digit id). Validated by
-  `utils.validators.validate_cve_id` against `^CVE-\d{4}-\d+$`.
-  (Note: `models.validate_cve_id` only checks empty/length, not the regex.)
-- **Time window (`--since`):** `1h`, `24h`, `7d`, `30d`.
-- **Severity (`--severity`):** `critical`, `high`, `medium`, `low` (case-insensitive;
-  comma-separated accepted).
-- **EPSS scales differ — convert at the boundary:** the CLI `--min-epss` and the
-  MCP `find_recent_exploits` `min_epss` use a **0–100** scale; `get_epss_score`
-  returns **0.0–1.0**. In the Python API, `CVEInfo.epss` is **0–100**.
-- **Bulk cap:** at most **100** CVEs per bulk/report call.
-- **Product aliases:** `discover_product_cves` / `ProductDiscoveryService` resolve
-  aliases (e.g. `struts` → `Apache Struts`).
+- **CVE ID:** `CVE-YYYY-NNNN+` (`^CVE-\d{4}-\d+$`). Lowercase is normalized.
+- **Bulk / report:** max **100** CVEs per call.
+- **EPSS scales (convert at the boundary):**
+  - Filter `min_epss` on CLI / `find_recent_exploits`: **0–100**
+  - MCP normalized CVE fields (`epss_score` on `lookup_cve`, reports, recent): **0.0–1.0**
+  - `get_epss_score`: **0.0–1.0**
+  - Python `CVEInfo.epss`: **0–100**
+- **`--since`:** `1h`, `24h`, `7d`, `30d`. **Severity:** `critical|high|medium|low`.
+- **Product vs package:** `discover_product_cves` = deployed product (nginx, Confluence).
+  `discover_package_cves` = dependency/SBOM (PyPI/npm/Maven/…) — only tool with fix versions.
+- **Silent negatives:** always read `sources` / error `category` before concluding "none".
+  Empty + `rate_limited`/`error` means *unknown*, not *none*. Empty ATT&CK list means
+  *unmapped*, not harmless.
 
-> **Env vars and the MCP server.** MCP clients launch the server with a filtered
-> environment (only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`), so a
-> `POCMAP_*` / `GITHUB_API_TOKEN` / `NVD_API_KEY` value exported in a shell never
-> reaches it. For MCP use they must go in the client config's `env` block. Shell
-> exports do work for the CLI and the Python API.
+> **Env vars for MCP.** Clients launch the server with a filtered env. Put
+> `GITHUB_API_TOKEN` / `NVD_API_KEY` / `POCMAP_*` in the client config `env` block —
+> shell exports do not reach MCP. Settings: `src/pocmap/config.py`
+> (`POCMAP_HTTP_TIMEOUT`, not `POCMAP_REQUEST_TIMEOUT`; `GITHUB_API_TOKEN`, not
+> `POCMAP_GITHUB_TOKEN`).
 
-## Error Handling (MCP tools)
+## Error Handling (MCP)
 
-Every MCP tool returns a JSON **string**. On failure it contains an `error` key
-and a `category`. Always check it:
+Every tool returns a **dict** (`structuredContent`), not a JSON string. Failures use
+an error envelope — check `error` first:
 
-```python
-data = json.loads(result)
-if "error" in data:
-    category = data.get("category", "unknown")   # not_found | rate_limited | offline | network_error | invalid_input | permission_error | not_enabled | unknown
-    retryable = data.get("retryable", False)
+```text
+error, error_type, category, retryable, context
+# category: not_found | rate_limited | offline | network_error |
+#           invalid_input | permission_error | not_enabled | unknown
 ```
 
-Retry only when `retryable` is true: wait 2s, retry; then 4s, retry once more
-(3 attempts total); then surface the last error with its `suggestion`.
+Retry only when `retryable` is true (≈3 attempts with backoff), then surface
+`suggestion`/`hint` if present.
 
-## Python API Examples (synchronous)
+## Architecture (brief)
 
-```python
-from pocmap.services import CVEService, ExploitService
-
-with CVEService() as cve, ExploitService() as exp:
-    info = cve.get_cve_info("CVE-2021-44228")   # CVEInfo
-    pocs = exp.find_github_pocs("CVE-2021-44228")  # list[Exploit]
-    print(info.cvss, "PoCs:", len(pocs))
-```
-
-```python
-from pocmap.services import ProductDiscoveryService
-
-with ProductDiscoveryService() as disco:
-    result = disco.discover_by_product("apache", version="2.4.x")
-    # result groups CVEs into confirmed / possibly-affected / not-enough-data
-```
-
-```python
-from pocmap.services import ReportService
-
-with ReportService() as rs:
-    report = rs.generate_bulk_report(["CVE-2021-44228", "CVE-2021-45046"])
-```
-
-## Environment Configuration
-
-Settings live in `src/pocmap/config.py` (frozen `Settings`, singleton `settings`),
-loaded from env + optional repo-root `.env`. Verified variables:
-
-| Variable | Purpose |
-|----------|---------|
-| `POCMAP_GITHUB_API_TOKEN` or `GITHUB_API_TOKEN` | GitHub token (raises rate limits) |
-| `POCMAP_NVD_API_KEY` or `NVD_API_KEY` | NVD API key (raises rate limits) |
-| `POCMAP_HTTP_TIMEOUT` | Request timeout, seconds (default 30) |
-| `POCMAP_MAX_RETRIES` | Max retries (default 3) |
-| `POCMAP_BACKOFF_FACTOR` | Backoff multiplier (default 1.5) |
-| `POCMAP_THREAD_POOL_SIZE` | Worker thread count for bulk ops (default 10) |
-| `POCMAP_CACHE_DIR` | Cache directory (default `<repo>/.cache`) |
-| `POCMAP_CACHE_ENABLED` | Enable the persistent HTTP cache (default `true`) |
-| `POCMAP_CACHE_TTL` | Seconds a cached entry stays fresh (default 3600) |
-| `POCMAP_CACHE_MAX_MB` | On-disk cache cap in MB before LRU eviction (default 200) |
-| `POCMAP_OFFLINE` | Serve HTTP only from cache; a miss errors (default `false`) |
-| `POCMAP_LOG_LEVEL` | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
-
-> Do NOT use `POCMAP_REQUEST_TIMEOUT` or `POCMAP_GITHUB_TOKEN` — those appear in older
-> docs but are not read by `config.py` (it's `POCMAP_HTTP_TIMEOUT` and `GITHUB_API_TOKEN`).
+**CLI / MCP → `services/` → `clients/` → `models` (pydantic).** Services are sync
+context managers. Key classes: `CVEService`, `ExploitService` (`find_exploits` /
+`find_exploits_with_status`), `ReportService`, `RecentService`,
+`ProductDiscoveryService`, `PackageService`, `LabService`, `BugBountyService`.
 
 ## References
 
-- `references/mcp_tools.md` — all 22 MCP tools with parameters and return shapes.
-- `references/cli_commands.md` — all 13 CLI commands with real flags.
-
-## External Links
-
+- `references/mcp_tools.md` — all **22** MCP tools, resources, prompts, return shapes
+- `references/cli_commands.md` — all **13** CLI commands with real flags
 - GitHub: https://github.com/zebbern/pocmap
