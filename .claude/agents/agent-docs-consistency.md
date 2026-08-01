@@ -34,8 +34,8 @@ as suspect until confirmed against source.
    tool contract. Flag any claim that still treats it as the MCP integration guide.
 
 ## What to check
-- **Tool inventory:** every tool named in the docs exists in `src/pocmap/mcp_server.py` with
-  the same name (watch singular/plural: real names are `find_metasploit_module`,
+- **Tool inventory:** every tool named in the docs exists under `src/pocmap/mcp/tools/`
+  with the same name (watch singular/plural: real names are `find_metasploit_module`,
   `find_nuclei_template` — singular). List any doc tool that doesn't exist, and any
   real tool that's undocumented.
 - **CLI inventory:** every documented command exists in `cli.py`; flag invented ones.
