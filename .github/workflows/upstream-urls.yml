@@ -1,0 +1,35 @@
+name: Upstream URL smoke
+
+# Live checks that config URLs still resolve. Kept out of the default PR CI
+# offline gate (see ci.yml) — mocks stay green while a URL can be completely dead.
+on:
+  schedule:
+    # Weekdays 06:15 UTC — early enough to catch overnight feed/path breaks.
+    - cron: "15 6 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  upstream-urls:
+    name: Network upstream URL checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run live upstream URL smoke tests
+        # Clear pyproject addopts (-m 'not network') so this job is the
+        # intentional network path. Default PR CI remains offline.
+        run: python -m pytest tests/test_upstream_urls.py -m network -q -o addopts=
