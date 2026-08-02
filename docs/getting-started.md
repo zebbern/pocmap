@@ -31,7 +31,8 @@ pocmap latest --since 7d --kev-only
 pocmap doctor
 ```
 
-Full command list: `pocmap --help`.
+Full command list: `pocmap --help`. Deeper CLI guides (`latest`, `discover`,
+`package`, formats, caching, CI): [CLI reference](cli.md).
 
 ## MCP server
 
@@ -68,7 +69,7 @@ The CLI `pocmap bugbounty` command **searches write-ups** for a CVE.
 Checklists, methodology workflows, report templates, prioritization helpers,
 scope management (`ScopeManager`), and automation (`ScopeMonitor`) live in the
 **Python API** under `pocmap.bugbounty` and packaged playbooks — they are not
-separate CLI commands. See the repository README → *Bug Bounty Toolkit*.
+separate CLI commands. See [Bug Bounty Toolkit](bug-bounty.md).
 
 ## Reports: MCP vs CLI / Python API
 

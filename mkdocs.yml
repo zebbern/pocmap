@@ -43,7 +43,11 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
+  - CLI reference: cli.md
+  - Bug Bounty Toolkit: bug-bounty.md
+  - Verifying PoCs: verifying-pocs.md
   - Architecture: architecture.md
+  - Contributing: contributing.md
   - Reference:
       - MCP tools: reference/mcp-tools.md
       - Data model schemas: reference/schemas.md

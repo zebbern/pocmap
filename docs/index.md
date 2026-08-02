@@ -14,9 +14,13 @@ MCP server (22 tools).
 ## Start here
 
 1. [Getting started](getting-started.md) — install, first CLI lookups, MCP connect
-2. [MCP tools reference](reference/mcp-tools.md) — generated inventory + input schemas
-3. [Data model schemas](reference/schemas.md) — Pydantic JSON Schema for core models
-4. [Architecture](architecture.md) — layers and where code lives
+2. [CLI reference](cli.md) — `latest`, `discover`, `package`, formats, caching, CI gate
+3. [Bug Bounty Toolkit](bug-bounty.md) — checklists, workflows, templates, scope, playbooks
+4. [Verifying PoCs](verifying-pocs.md) — opt-in source download and verdict tiers
+5. [MCP tools reference](reference/mcp-tools.md) — generated inventory + input schemas
+6. [Data model schemas](reference/schemas.md) — Pydantic JSON Schema for core models
+7. [Architecture](architecture.md) — layers and where code lives
+8. [Contributing](contributing.md) — in-tree sources, plugins, local setup
 
-For the full narrative README (examples, CI gate, caching, plugins), see the
-[GitHub repository](https://github.com/zebbern/pocmap).
+Quick start and MCP client configs also live in the
+[GitHub README](https://github.com/zebbern/pocmap).
