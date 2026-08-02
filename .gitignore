@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 
 # Distribution / packaging
 build/
@@ -10,36 +11,62 @@ dist/
 *.egg
 .eggs/
 wheels/
+pip-wheel-metadata/
 
 # Virtual environments
 .venv/
 venv/
 env/
 ENV/
+.direnv/
 
-# Tooling caches
+# Tooling caches & test artifacts
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-.coverage
-htmlcov/
+.hypothesis/
+.nox/
 .tox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.cover
+.cache/
+*.log
 
 # MkDocs build output
 site/
 
-# pocmap runtime
-.cache/
+# pocmap runtime / local exports
 .env
+.env.*
+!.env.example
 schemas/
+out/
+reports/
+*.sarif
 
-# Editors / OS
+# Local AI / editor state
+# Public agent skill only — keep .claude/skills/pocmap-agent tracked for consumers
+.claude/**
+!.claude/skills/
+!.claude/skills/pocmap-agent/
+!.claude/skills/pocmap-agent/**
+.cursor/
+.codex/
+.continue/
 .idea/
 .vscode/
 *.swp
+*.swo
+*~
+
+# OS junk
 .DS_Store
 Thumbs.db
+Desktop.ini
+ehthumbs.db
 
 # Local machine config, never part of the package
 ssh_config.json
-.cursor/
