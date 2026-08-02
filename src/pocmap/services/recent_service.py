@@ -38,6 +38,11 @@ from pocmap.models import (
     RecentExploitResult,
     Severity,
 )
+from pocmap.services.cve_service import (
+    _affected_from_nvd,
+    _pick_primary_affected,
+    _prioritize_affected,
+)
 from pocmap.utils.http import (
     HTTPClient,
     HTTPError,
@@ -177,6 +182,14 @@ class RecentService:
         # Clamp limit
         limit = max(1, min(100, limit))
 
+        # NVD's cvssV3Severity filter is imperfect (returns non-matching rows;
+        # displayed CVSS may be v4 with a different band). PoC filtering also
+        # drops most brand-new CVEs. Oversample the window so post-filters can
+        # still fill ``limit``.
+        fetch_limit = limit
+        if nvd_severities or only_with_poc:
+            fetch_limit = min(100, max(limit * 5, limit))
+
         logger.info(
             "Fetching recent CVEs from %s to %s (severity=%s, kev_only=%s)",
             pub_start.isoformat(),
@@ -191,7 +204,7 @@ class RecentService:
             pub_end=pub_end,
             severity=nvd_severities,
             kev_only=kev_only,
-            limit=limit,
+            limit=fetch_limit,
         )
 
         if not raw_vulns:
@@ -199,8 +212,27 @@ class RecentService:
             return []
 
         # Convert raw NVD data to CVEInfo models, dropping failed conversions.
-        converted = [self._convert_raw_cve(v) for v in raw_vulns]
+        # When a severity filter is active, prefer a matching CVSS metric for
+        # display (v3 CRITICAL over newer v4 HIGH) so the row's severity agrees
+        # with why it was kept — without dropping multi-metric CRITICAL CVEs.
+        converted = [
+            self._convert_raw_cve(v, prefer_severities=nvd_severities)
+            for v in raw_vulns
+        ]
         cve_infos: list[CVEInfo] = [c for c in converted if c is not None]
+
+        # Keep a CVE if *any* CVSS metric matches the requested severity (recall),
+        # not only the newest/displayed band. Drop NVD false positives that have
+        # no matching metric on any version.
+        if nvd_severities:
+            wanted = set(nvd_severities)
+            kept: list[CVEInfo] = []
+            for raw, info in zip(raw_vulns, converted, strict=False):
+                if info is None:
+                    continue
+                if self._nvd.cvss_severity_labels(raw) & wanted:
+                    kept.append(info)
+            cve_infos = kept
 
         # NVD returns neither EPSS nor KEV, so both are enriched from pocmap's
         # cached bulk feeds. Done unconditionally: each is ONE cached download
@@ -665,11 +697,19 @@ class RecentService:
 
         return bool(sources), sources
 
-    def _convert_raw_cve(self, raw_cve: dict[str, Any]) -> CVEInfo | None:
+    def _convert_raw_cve(
+        self,
+        raw_cve: dict[str, Any],
+        *,
+        prefer_severities: list[str] | None = None,
+    ) -> CVEInfo | None:
         """Convert a raw NVD CVE dictionary into a :class:`CVEInfo` model.
 
         Args:
             raw_cve: Raw CVE data from the NVD API.
+            prefer_severities: When set, prefer a CVSS metric whose severity is
+                in this list (used under severity filters so v3 CRITICAL is not
+                masked by a newer v4 HIGH/MEDIUM).
 
         Returns:
             Populated :class:`CVEInfo` instance, or *None* if conversion fails.
@@ -690,7 +730,7 @@ class RecentService:
                 description = descriptions[0].get("value", "")
 
             # Extract CVSS using the NVD client's logic
-            cvss = self._nvd.extract_cvss(raw_cve)
+            cvss = self._nvd.extract_cvss(raw_cve, prefer_severities=prefer_severities)
 
             # Extract CWEs
             cwes = self._nvd.extract_cwes(raw_cve)
@@ -704,24 +744,11 @@ class RecentService:
                     source = ref.get("source", f"ref_{i}")
                     references[source] = url
 
-            # Extract vendor/product from CPEs
-            vendor: str | None = None
-            product: str | None = None
-            configs = raw_cve.get("configurations", [])
-            for conf in configs:
-                for node in conf.get("nodes", []):
-                    for match in node.get("cpeMatch", []):
-                        criteria = match.get("criteria", "")
-                        if criteria:
-                            parts = criteria.split(":")
-                            if len(parts) >= 5:
-                                vendor = parts[3] or vendor
-                                product = parts[4] or product
-                                break
-                    if vendor and product:
-                        break
-                if vendor and product:
-                    break
+            # Extract vendor/product from CPEs — rank by description, do not
+            # trust NVD's first CPE (often a downstream firmware SKU).
+            affected = _affected_from_nvd(raw_cve)
+            vendor, product = _pick_primary_affected(affected, description)
+            affected = _prioritize_affected(affected, vendor, product)
 
             # Publication date
             pub_date = raw_cve.get("published")
@@ -736,6 +763,7 @@ class RecentService:
                 references=references,
                 vendor=vendor or "N/A",
                 product=product or "N/A",
+                affected_products=affected,
                 publication_date=pub_date,
                 state=CVEState.PUBLISHED,
             )

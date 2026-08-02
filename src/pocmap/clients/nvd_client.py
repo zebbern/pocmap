@@ -80,37 +80,68 @@ class NVDClient:
             logger.warning("NVD API request failed for %s", safe_cve_id)
         return None
 
-    def extract_cvss(self, cve_data: dict[str, Any]) -> CVSSScore:
+    _CVSS_VERSIONS: tuple[tuple[str, str, CVSSVersion], ...] = (
+        ("cvssMetricV40", "cvssData", CVSSVersion.V4_0),
+        ("cvssMetricV31", "cvssData", CVSSVersion.V3_1),
+        ("cvssMetricV30", "cvssData", CVSSVersion.V3_0),
+        ("cvssMetricV2", "cvssData", CVSSVersion.V2_0),
+    )
+
+    def extract_cvss(
+        self,
+        cve_data: dict[str, Any],
+        *,
+        prefer_severities: list[str] | None = None,
+    ) -> CVSSScore:
         """Extract CVSS scoring information from NVD CVE data.
 
-        Tries CVSS versions in order: v4.0, v3.1, v3.0, v2.0.
+        Tries CVSS versions in order: v4.0, v3.1, v3.0, v2.0. When
+        *prefer_severities* is set (e.g. a CRITICAL filter), prefer a metric
+        whose ``baseSeverity`` is in that set so a v3 CRITICAL is not hidden
+        behind a newer v4 HIGH/MEDIUM band — then fall back to the newest
+        available metric.
 
         Args:
             cve_data: Raw CVE data from :meth:`get_cve`.
+            prefer_severities: Optional severity labels to prefer when present.
 
         Returns:
             A populated :class:`CVSSScore` instance.
         """
         metrics = cve_data.get("metrics", {})
+        preferred = {s.upper() for s in prefer_severities} if prefer_severities else set()
 
-        # Try each CVSS version in descending order
-        for version_key, cvss_key, version_enum in [
-            ("cvssMetricV40", "cvssData", CVSSVersion.V4_0),
-            ("cvssMetricV31", "cvssData", CVSSVersion.V3_1),
-            ("cvssMetricV30", "cvssData", CVSSVersion.V3_0),
-            ("cvssMetricV2", "cvssData", CVSSVersion.V2_0),
-        ]:
+        fallback: CVSSScore | None = None
+        for version_key, cvss_key, version_enum in self._CVSS_VERSIONS:
             metric_list = metrics.get(version_key)
-            if metric_list:
-                cvss_data = metric_list[0].get(cvss_key, {})
-                return CVSSScore.from_raw(
-                    version=version_enum.value,
-                    base_score=cvss_data.get("baseScore"),
-                    severity=cvss_data.get("baseSeverity", "UNKNOWN"),
-                    vector_string=cvss_data.get("vectorString"),
-                )
+            if not metric_list:
+                continue
+            cvss_data = metric_list[0].get(cvss_key, {})
+            score = CVSSScore.from_raw(
+                version=version_enum.value,
+                base_score=cvss_data.get("baseScore"),
+                severity=cvss_data.get("baseSeverity", "UNKNOWN"),
+                vector_string=cvss_data.get("vectorString"),
+            )
+            if fallback is None:
+                fallback = score
+            if preferred and score.severity.value in preferred:
+                return score
 
-        return CVSSScore()
+        return fallback if fallback is not None else CVSSScore()
+
+    def cvss_severity_labels(self, cve_data: dict[str, Any]) -> set[str]:
+        """Return every CVSS ``baseSeverity`` label present on the NVD record."""
+        metrics = cve_data.get("metrics", {})
+        labels: set[str] = set()
+        for version_key, cvss_key, _version_enum in self._CVSS_VERSIONS:
+            metric_list = metrics.get(version_key)
+            if not metric_list:
+                continue
+            severity = metric_list[0].get(cvss_key, {}).get("baseSeverity")
+            if isinstance(severity, str) and severity:
+                labels.add(severity.upper())
+        return labels
 
     def extract_cwes(self, cve_data: dict[str, Any]) -> list[str]:
         """Extract CWE identifiers from NVD CVE data.

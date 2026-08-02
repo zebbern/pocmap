@@ -56,8 +56,10 @@ def _blank_to_none(value: object) -> str | None:
 def _affected_from_nvd(nvd_record: dict[str, Any]) -> list[AffectedProduct]:
     """Derive ``(vendor, product)`` pairs from an NVD record's CPE matches.
 
-    Order is preserved and duplicates dropped, so the first pair is the one NVD
-    lists first — the vulnerable component rather than a distro that shipped it.
+    Order is preserved and duplicates dropped. Callers that need a single
+    "primary" pair should use :func:`_pick_primary_affected` — NVD often lists
+    downstream vendor firmware before the component named in the description
+    (Log4Shell: Siemens SKUs before ``apache:log4j``).
     """
     seen: set[tuple[str, str]] = set()
     pairs: list[AffectedProduct] = []
@@ -73,6 +75,68 @@ def _affected_from_nvd(nvd_record: dict[str, Any]) -> list[AffectedProduct]:
                 seen.add(pair)
                 pairs.append(AffectedProduct(vendor=pair[0], product=pair[1]))
     return pairs
+
+
+def _pick_primary_affected(
+    products: list[AffectedProduct],
+    description: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Choose the scalar vendor/product that best matches the CVE description.
+
+    NVD CPE order is not authoritative for "what is this CVE about" — downstream
+    integrators often appear first. Prefer pairs whose vendor/product tokens
+    appear in the description, and demote ``*_firmware`` SKUs.
+    """
+    if not products:
+        return None, None
+
+    desc = (description or "").lower()
+
+    def _score(ap: AffectedProduct) -> tuple[int, int, int]:
+        vendor = (ap.vendor or "").lower()
+        product = (ap.product or "").lower()
+        product_spaced = product.replace("_", " ")
+        vendor_spaced = vendor.replace("_", " ")
+        hit = 0
+        if product and (product in desc or product_spaced in desc):
+            hit += 2
+        elif product:
+            # Partial token match: "log4j" inside "Apache Log4j2 ..."
+            for token in product.split("_"):
+                if len(token) >= 4 and token in desc:
+                    hit += 1
+                    break
+        if vendor and (vendor in desc or vendor_spaced in desc):
+            hit += 1
+        firmware_penalty = 1 if "firmware" in product else 0
+        # Prefer shorter product slugs when scores tie (log4j over long SKUs).
+        return (hit, -firmware_penalty, -len(product))
+
+    best = max(products, key=_score)
+    return best.vendor, best.product
+
+
+def _prioritize_affected(
+    products: list[AffectedProduct],
+    vendor: str | None,
+    product: str | None,
+) -> list[AffectedProduct]:
+    """Move the primary ``(vendor, product)`` pair to the front of the list."""
+    if not products or not vendor or not product:
+        return products
+    primary = [
+        ap
+        for ap in products
+        if ap.vendor == vendor and ap.product == product
+    ]
+    if not primary:
+        return products
+    rest = [
+        ap
+        for ap in products
+        if not (ap.vendor == vendor and ap.product == product)
+    ]
+    return primary + rest
 
 
 def _cna_references(raw_refs: list[dict[str, Any]]) -> dict[str, str]:
@@ -274,8 +338,14 @@ class CVEService:
                 # carries the CPE slug ("apache / log4j2").
                 if not affected:
                     affected = _affected_from_nvd(nvd_record)
-                if vendor is None and product is None and affected:
-                    vendor, product = affected[0].vendor, affected[0].product
+
+        # Description is needed both for the response and to rank NVD CPE pairs
+        # when CVE.org left vendor/product blank.
+        description = self._cveorg.get_description(cve_id)
+
+        if vendor is None and product is None and affected:
+            vendor, product = _pick_primary_affected(affected, description)
+            affected = _prioritize_affected(affected, vendor, product)
 
         # Get EPSS score
         epss = self._cveorg.get_epss(cve_id)
@@ -289,9 +359,6 @@ class CVEService:
 
         # Check ransomware usage
         ransomware = self._cveorg.get_ransomware_usage(cve_id)
-
-        # Get description
-        description = self._cveorg.get_description(cve_id)
 
         # Build and return the model
         cve_info = CVEInfo(

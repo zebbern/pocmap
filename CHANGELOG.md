@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.1] - 2026-08-03
+
+Smoke-test fixes for recent-CVE severity accuracy, primary affected product ranking,
+and PoC-filtered recent recall.
+
+### Fixed
+
+- **`find_recent_exploits` severity filter no longer leaks HIGH/MEDIUM into CRITICAL.**
+  NVD's `cvssV3Severity` can return rows with no matching metric, and preferring CVSS
+  v4 for display hid v3 CRITICAL behind a newer HIGH/MEDIUM band. Results are kept when
+  *any* CVSS metric matches the requested severity, and display prefers a matching
+  metric so the label agrees with the filter.
+- **Primary vendor/product no longer takes the first NVD CPE blindly.** When CVE.org
+  leaves vendor/product blank, NVD CPE order often lists downstream firmware SKUs first
+  (Log4Shell → Siemens). Primary pair is ranked against the description and
+  `*_firmware` products are demoted; the chosen pair is moved to the front of
+  `affected_products`.
+- **`only_with_poc` oversamples the NVD window before filtering.** Fetching only
+  ``limit`` newest CVEs then dropping those without GitHub PoCs often returned zero
+  for a 7-day window of brand-new CVEs. The fetch now oversamples (up to 100) when
+  severity or PoC filters are active so post-filters can still fill ``limit``.
+
 ## [2.7.0] - 2026-08-01
 
 MCP package split, honest report/`sources` paths, GitHub PoC Search fallback for index-lag
