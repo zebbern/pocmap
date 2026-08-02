@@ -13,14 +13,16 @@ MCP server (22 tools).
 
 ## Start here
 
-1. [Getting started](getting-started.md) — install, first CLI lookups, MCP connect
+1. [Getting started](getting-started.md) — install, first CLI lookups, Claude/Cursor MCP configs
 2. [CLI reference](cli.md) — `latest`, `discover`, `package`, formats, caching, CI gate
-3. [Bug Bounty Toolkit](bug-bounty.md) — checklists, workflows, templates, scope, playbooks
-4. [Verifying PoCs](verifying-pocs.md) — opt-in source download and verdict tiers
-5. [MCP tools reference](reference/mcp-tools.md) — generated inventory + input schemas
-6. [Data model schemas](reference/schemas.md) — Pydantic JSON Schema for core models
-7. [Architecture](architecture.md) — layers and where code lives
-8. [Contributing](contributing.md) — in-tree sources, plugins, local setup
+3. [Python API](python-api.md) — service examples and schema export
+4. [Configuration](configuration.md) — env vars, cache, offline, PoC source fetch
+5. [Bug Bounty Toolkit](bug-bounty.md) — checklists, workflows, templates, scope, playbooks
+6. [Verifying PoCs](verifying-pocs.md) — opt-in source download and verdict tiers
+7. [MCP tools reference](reference/mcp-tools.md) — generated inventory + input schemas
+8. [Data model schemas](reference/schemas.md) — Pydantic JSON Schema for core models
+9. [Architecture](architecture.md) — layers and where code lives
+10. [Contributing](contributing.md) — in-tree sources, plugins, local setup
 
-Quick start and MCP client configs also live in the
+Install and a short quick start also live in the
 [GitHub README](https://github.com/zebbern/pocmap).

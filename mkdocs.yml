@@ -44,6 +44,8 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - CLI reference: cli.md
+  - Python API: python-api.md
+  - Configuration: configuration.md
   - Bug Bounty Toolkit: bug-bounty.md
   - Verifying PoCs: verifying-pocs.md
   - Architecture: architecture.md
