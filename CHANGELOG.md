@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.2] - 2026-08-03
+
+Precision / agent-usability cut after 2.8.1 smoke feedback.
+
+### Fixed
+
+- **GitHub PoC CVE token matching:** reject longer-ID prefix hits
+  (`CVE-2026-3141` no longer returns `CVE-2026-31413-*`). Search uses a quoted
+  query plus `cve_id_mentioned` boundary checks on URL/name/description;
+  reference URL promotion uses the same rule.
+- **Product×version NVD query:** exact versions use half-open
+  `versionStart`/`versionEnd` bounds (NVD forbids embedding the version in
+  `virtualMatchString`). Vendor hints that equal the product name (e.g.
+  `nginx`/`nginx`) no longer drop higher-signal CPE vendors like `f5:nginx`.
+- **`only_with_poc` rate limits:** throttled PoC checks are retained as
+  `poc_unknown` (`poc_check.unknown` / `rate_limited`) instead of dropped as
+  empty.
+
+### Added
+
+- **`why_empty`** on product discovery when all confidence buckets are empty.
+- **Agent report shaping:** Metasploit/ExploitDB/Nuclei first; GitHub capped
+  (default 15) by `trust_score`; `labels: ["index"]` omitted by default;
+  optional `include_github` / `max_github` / `min_trust_score` /
+  `include_index_repos`; per-entry `exploit_trim` counts.
+
+### Changed
+
+- Louder `verify_github_pocs` opt-in wording (`POCMAP_ALLOW_FETCH_POC_SOURCE=1`).
+
 ## [2.8.1] - 2026-08-03
 
 ### Fixed

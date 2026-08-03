@@ -30,6 +30,14 @@ logger = logging.getLogger("pocmap-mcp")
 # Maximum number of CVEs allowed in bulk report operations
 MAX_CVE_BULK = 100
 
+# Agent-usable report defaults: famous CVEs can have 2k+ GitHub index hits.
+_DEFAULT_MAX_GITHUB_REPORT = 15
+_REPORT_SOURCE_ORDER = (
+    ExploitSource.METASPLOIT.value,
+    ExploitSource.EXPLOITDB.value,
+    ExploitSource.NUCLEI.value,
+)
+
 # EPSS is published to 5 decimal places, so rounding the 0-100 -> 0-1
 # conversion there is lossless and keeps float noise out of the payload.
 _EPSS_DP = 5
@@ -357,7 +365,13 @@ class ServiceAdapter:
     # -- Report Generation --
 
     def _collect_report_entry(
-        self, cve_id: str
+        self,
+        cve_id: str,
+        *,
+        include_github: bool = True,
+        max_github: int = _DEFAULT_MAX_GITHUB_REPORT,
+        min_trust_score: float = 0.0,
+        include_index_repos: bool = False,
     ) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
         """Build one report entry using the same exploit collection as ReportService.
 
@@ -376,7 +390,7 @@ class ServiceAdapter:
         # but with per-source status so agents can tell empty from rate-limited.
         try:
             exploit_result = self._exploit.find_exploits_with_status(cve_id)
-            exploits = [self._normalize_exploit(e) for e in exploit_result.exploits]
+            raw_exploits = [self._normalize_exploit(e) for e in exploit_result.exploits]
             sources = [s.to_dict() for s in exploit_result.sources]
         except Exception as e:
             if is_programming_error(e):
@@ -384,7 +398,7 @@ class ServiceAdapter:
             if isinstance(e, HTTPError):
                 raise
             logger.warning("Exploit collection failed for %s: %s", cve_id, e)
-            exploits = []
+            raw_exploits = []
             sources = [{
                 "source": "all",
                 "status": "error",
@@ -393,6 +407,14 @@ class ServiceAdapter:
                 "category": "unknown",
                 "detail": f"Exploit collection failed ({type(e).__name__})",
             }]
+
+        exploits, exploit_trim = self._shape_report_exploits(
+            raw_exploits,
+            include_github=include_github,
+            max_github=max_github,
+            min_trust_score=min_trust_score,
+            include_index_repos=include_index_repos,
+        )
 
         labs = self.find_labs(cve_id)
         bb_reports = self.find_bug_bounty_reports(cve_id)
@@ -415,9 +437,101 @@ class ServiceAdapter:
             "bb_reports": bb_reports,
             "sources": sources,
             "triage": triage,
+            "exploit_trim": exploit_trim,
         }, None
 
-    def generate_json_report(self, cve_ids: list[str]) -> dict[str, Any]:
+    @staticmethod
+    def _shape_report_exploits(
+        exploits: list[dict[str, Any]],
+        *,
+        include_github: bool,
+        max_github: int,
+        min_trust_score: float,
+        include_index_repos: bool,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Cap/filter/reorder exploits so agent reports stay usable."""
+        github_key = ExploitSource.GITHUB.value
+        total_before = len(exploits)
+        kept: list[dict[str, Any]] = []
+        github_kept = 0
+        dropped_index = 0
+        dropped_trust = 0
+        dropped_github_cap = 0
+        dropped_github_disabled = 0
+
+        def _trust(ex: dict[str, Any]) -> float:
+            raw = ex.get("trust_score")
+            try:
+                return float(raw) if raw is not None else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
+        # Rank GitHub candidates first so the cap keeps the best ones.
+        non_github = [ex for ex in exploits if ex.get("source") != github_key]
+        github = sorted(
+            (ex for ex in exploits if ex.get("source") == github_key),
+            key=lambda ex: (_trust(ex), ex.get("stars") or 0),
+            reverse=True,
+        )
+
+        for ex in non_github:
+            if min_trust_score > 0 and _trust(ex) < min_trust_score:
+                dropped_trust += 1
+                continue
+            kept.append(ex)
+
+        if not include_github:
+            dropped_github_disabled = len(github)
+        else:
+            for ex in github:
+                labels = ex.get("labels") or []
+                if not include_index_repos and "index" in labels:
+                    dropped_index += 1
+                    continue
+                if min_trust_score > 0 and _trust(ex) < min_trust_score:
+                    dropped_trust += 1
+                    continue
+                if github_kept >= max(0, max_github):
+                    dropped_github_cap += 1
+                    continue
+                kept.append(ex)
+                github_kept += 1
+
+        order_rank = {name: i for i, name in enumerate(_REPORT_SOURCE_ORDER)}
+
+        def _source_rank(ex: dict[str, Any]) -> tuple[int, float, int]:
+            src = str(ex.get("source") or "")
+            if src == github_key:
+                bucket = len(_REPORT_SOURCE_ORDER) + 1
+            else:
+                bucket = order_rank.get(src, len(_REPORT_SOURCE_ORDER))
+            return (bucket, -_trust(ex), -(ex.get("stars") or 0))
+
+        kept.sort(key=_source_rank)
+        trim = {
+            "total_before": total_before,
+            "total_after": len(kept),
+            "github_returned": github_kept,
+            "max_github": max_github,
+            "include_github": include_github,
+            "include_index_repos": include_index_repos,
+            "min_trust_score": min_trust_score,
+            "dropped_index": dropped_index,
+            "dropped_trust": dropped_trust,
+            "dropped_github_cap": dropped_github_cap,
+            "dropped_github_disabled": dropped_github_disabled,
+        }
+        return kept, trim
+
+    def generate_json_report(
+        self,
+        cve_ids: list[str],
+        *,
+        include_github: bool = True,
+        max_github: int = _DEFAULT_MAX_GITHUB_REPORT,
+        min_trust_score: float = 0.0,
+        include_index_repos: bool = False,
+    ) -> dict[str, Any]:
         """Generate JSON report for CVE IDs."""
         if len(cve_ids) > MAX_CVE_BULK:
             return {
@@ -427,7 +541,13 @@ class ServiceAdapter:
         entries: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
         for cve_id in cve_ids:
-            entry, err = self._collect_report_entry(cve_id)
+            entry, err = self._collect_report_entry(
+                cve_id,
+                include_github=include_github,
+                max_github=max_github,
+                min_trust_score=min_trust_score,
+                include_index_repos=include_index_repos,
+            )
             if err is not None:
                 errors.append(err)
                 continue
@@ -443,7 +563,15 @@ class ServiceAdapter:
             "errors": errors,
         }
 
-    def generate_html_report(self, cve_ids: list[str]) -> dict[str, Any]:
+    def generate_html_report(
+        self,
+        cve_ids: list[str],
+        *,
+        include_github: bool = True,
+        max_github: int = _DEFAULT_MAX_GITHUB_REPORT,
+        min_trust_score: float = 0.0,
+        include_index_repos: bool = False,
+    ) -> dict[str, Any]:
         """Generate HTML report for CVE IDs."""
         if len(cve_ids) > MAX_CVE_BULK:
             return {
@@ -455,7 +583,13 @@ class ServiceAdapter:
         entries: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
         for cve_id in cve_ids:
-            entry, err = self._collect_report_entry(cve_id)
+            entry, err = self._collect_report_entry(
+                cve_id,
+                include_github=include_github,
+                max_github=max_github,
+                min_trust_score=min_trust_score,
+                include_index_repos=include_index_repos,
+            )
             if err is not None:
                 errors.append(err)
                 continue
@@ -836,6 +970,7 @@ class ServiceAdapter:
             "confirmed_affected": confirmed,
             "possibly_affected": possibly,
             "not_enough_data": unknown,
+            "why_empty": getattr(r, "why_empty", None),
             "summary": {
                 "confirmed_count": len(confirmed),
                 "possibly_count": len(possibly),

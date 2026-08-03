@@ -233,6 +233,13 @@ class ProductDiscoveryResult(BaseModel):
             "keyword search was used instead (see ``search_sources``)."
         ),
     )
+    why_empty: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "When confirmed/possible/unknown are all empty, explains whether the "
+            "CPE resolved but NVD returned no version hits, resolution failed, etc."
+        ),
+    )
 
 
 class PackageVulnerability(BaseModel):

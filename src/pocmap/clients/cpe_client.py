@@ -153,15 +153,25 @@ class CPEDictionaryClient:
 
         if vendor_hint:
             hint = _slug(vendor_hint)
-            narrowed = {p: c for p, c in candidates.items() if hint in _slug(p[0])}
-            if narrowed:
-                candidates = narrowed
-            else:
+            # Same token as the product ("nginx"/"nginx") is product identity,
+            # not a CPE vendor. Narrowing would keep nginx:nginx (2 CVEs) and
+            # drop f5:nginx (41+) — the filing most advisories actually use.
+            if hint == target:
                 logger.debug(
-                    "Vendor hint %r matched no CPE vendor for %r; ignoring it",
+                    "Vendor hint %r equals product %r; skipping vendor narrow",
                     vendor_hint,
                     product,
                 )
+            else:
+                narrowed = {p: c for p, c in candidates.items() if hint in _slug(p[0])}
+                if narrowed:
+                    candidates = narrowed
+                else:
+                    logger.debug(
+                        "Vendor hint %r matched no CPE vendor for %r; ignoring it",
+                        vendor_hint,
+                        product,
+                    )
 
         ranked = sorted(candidates.items(), key=lambda kv: (-kv[1], kv[0]))
         pairs = [pair for pair, _count in ranked]

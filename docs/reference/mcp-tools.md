@@ -20,7 +20,7 @@ Auto-generated from the registered PocMap MCP server (`python scripts/generate_m
 | `find_recent_exploits` | Find recently published CVEs with exploit and PoC intelligence. |
 | `find_vulhub_docker` | Find a Vulhub Docker environment for a CVE. |
 | `generate_html_report` | Generate a comprehensive HTML vulnerability report for one or more CVEs. |
-| `generate_json_report` | Full assessment for one or more known CVE IDs in a single call: description, CVSS, EPSS, KEV, exploits across GitHub/Metasploit/ExploitDB/Nuclei (plus plugins), practice labs, and bug bounty reports. |
+| `generate_json_report` | Full assessment for one or more known CVE IDs in a single call: description, CVSS, EPSS, KEV, exploits across Metasploit/ExploitDB/Nuclei first then capped GitHub PoCs, practice labs, and bug bounty reports. |
 | `get_attack_techniques` | Get the MITRE ATT&CK techniques a CVE maps to — how it is exploited, and what the attacker achieves afterwards. |
 | `get_bug_bounty_playbook` | Get the bug bounty submission playbook from finding to report submission. |
 | `get_cve_assessment_playbook` | Get the complete CVE assessment playbook with detailed step-by-step workflow. |
@@ -144,7 +144,7 @@ Find vulnerabilities in a software PACKAGE (a dependency) and the exact releases
 
 ### `discover_product_cves`
 
-Discover CVEs affecting a product by name and version. Use when the user provides a product name but not a specific CVE ID. Supports version wildcards like '2.x' and product aliases (e.g., 'struts' matches 'Apache Struts'). Results are grouped by confidence: confirmed_affected (vendor+product+version match), possibly_affected (vendor or product match but version unclear), and not_enough_data (insufficient product/version info). This tool searches the NVD database using keyword search and applies fuzzy product name matching and version constraint parsing for accurate results.
+Discover CVEs affecting a product by name and version. Use when the user provides a product name but not a specific CVE ID. Supports version wildcards like '2.x' and product aliases (e.g., 'struts' matches 'Apache Struts'). Results are grouped by confidence: confirmed_affected (vendor+product+version match), possibly_affected (vendor or product match but version unclear), and not_enough_data (insufficient product/version info). When all buckets are empty, why_empty.reason explains whether CPE resolved but NVD returned no version hits vs resolution failed (empty ≠ absent).
 
 **Input schema**
 
@@ -347,7 +347,7 @@ Find CTF (Capture The Flag) labs, vulnerable machines, and practice environments
 
 ### `find_recent_exploits`
 
-Find recently published CVEs with exploit and PoC intelligence. Scans the NVD for newly published vulnerabilities within a configurable time window, then enriches each CVE with CVSS scoring, CISA KEV status, and PoC availability from GitHub. Results can be filtered by severity, KEV status, minimum EPSS score, and PoC availability. Response includes filter_stats (fetched/after_severity/after_epss/after_poc/returned and poc_check ok/empty/error/rate_limited counts) so empty only_with_poc results are explainable. Each cve_info includes a triage summary. Cold start / first call can take 10–30s. Use for emerging threats, disclosure monitoring, or daily/weekly briefings.
+Find recently published CVEs with exploit and PoC intelligence. Scans the NVD for newly published vulnerabilities within a configurable time window, then enriches each CVE with CVSS scoring, CISA KEV status, and PoC availability from GitHub. Results can be filtered by severity, KEV status, minimum EPSS score, and PoC availability. Response includes filter_stats (fetched/after_severity/after_epss/after_poc/returned and poc_check ok/empty/error/rate_limited/unknown counts). Rate-limited PoC checks are kept as poc_unknown (not dropped as 'no PoC'). Each cve_info includes a triage summary. Cold start / first call can take 10–30s. Use for emerging threats, disclosure monitoring, or daily/weekly briefings.
 
 **Input schema**
 
@@ -433,7 +433,7 @@ Find a Vulhub Docker environment for a CVE. Vulhub provides pre-built Docker Com
 
 ### `generate_html_report`
 
-Generate a comprehensive HTML vulnerability report for one or more CVEs. The report includes styled cards with CVE details (description, CVSS, EPSS, KEV status), all discovered exploits and PoCs with source badges, available practice labs, and bug bounty reports. The HTML is self-contained with embedded CSS for immediate viewing. Use this tool when creating human-readable reports for stakeholders, security teams, or documentation. The HTML report can be saved to a file and opened in any browser.
+Generate a comprehensive HTML vulnerability report for one or more CVEs. Uses the same agent-friendly exploit shaping as generate_json_report (Metasploit/EDB/Nuclei first, capped GitHub, index repos omitted by default). The HTML is self-contained with embedded CSS for immediate viewing.
 
 **Input schema**
 
@@ -443,6 +443,26 @@ Generate a comprehensive HTML vulnerability report for one or more CVEs. The rep
     "cve_ids": {
       "title": "Cve Ids",
       "type": "string"
+    },
+    "include_github": {
+      "default": true,
+      "title": "Include Github",
+      "type": "boolean"
+    },
+    "max_github": {
+      "default": 15,
+      "title": "Max Github",
+      "type": "integer"
+    },
+    "min_trust_score": {
+      "default": 0.0,
+      "title": "Min Trust Score",
+      "type": "number"
+    },
+    "include_index_repos": {
+      "default": false,
+      "title": "Include Index Repos",
+      "type": "boolean"
     }
   },
   "required": [
@@ -457,7 +477,7 @@ Generate a comprehensive HTML vulnerability report for one or more CVEs. The rep
 
 ### `generate_json_report`
 
-Full assessment for one or more known CVE IDs in a single call: description, CVSS, EPSS, KEV, exploits across GitHub/Metasploit/ExploitDB/Nuclei (plus plugins), practice labs, and bug bounty reports. Each entry includes triage (priority/reasons/next_actions) plus a sources block (ok/empty/rate_limited/error) so an empty exploit list is never a silent negative. Prefer this for a complete picture or multi-CVE prioritization — not when they only asked for a PoC (use find_github_pocs). Cold start / first call can take 10–30s. Accepts comma-separated IDs. Suitable for automation, CI/CD, and dashboards.
+Full assessment for one or more known CVE IDs in a single call: description, CVSS, EPSS, KEV, exploits across Metasploit/ExploitDB/Nuclei first then capped GitHub PoCs, practice labs, and bug bounty reports. Defaults drop labels=['index'] repos and keep top GitHub hits by trust_score (max_github=15) so famous-CVE reports stay agent-usable; each entry has exploit_trim counts. Also includes triage (priority/reasons/next_actions) and sources (ok/empty/rate_limited/error). Prefer this for a complete picture — not when they only asked for a PoC (use find_github_pocs). Cold start 10–30s. Accepts comma-separated IDs.
 
 **Input schema**
 
@@ -467,6 +487,26 @@ Full assessment for one or more known CVE IDs in a single call: description, CVS
     "cve_ids": {
       "title": "Cve Ids",
       "type": "string"
+    },
+    "include_github": {
+      "default": true,
+      "title": "Include Github",
+      "type": "boolean"
+    },
+    "max_github": {
+      "default": 15,
+      "title": "Max Github",
+      "type": "integer"
+    },
+    "min_trust_score": {
+      "default": 0.0,
+      "title": "Min Trust Score",
+      "type": "number"
+    },
+    "include_index_repos": {
+      "default": false,
+      "title": "Include Index Repos",
+      "type": "boolean"
     }
   },
   "required": [
@@ -601,7 +641,7 @@ Look up detailed information about a CVE (Common Vulnerabilities and Exposures) 
 
 ### `verify_github_pocs`
 
-Read the SOURCE of the top GitHub PoC repositories for a CVE and report what each one actually contains, instead of trusting that a repo which mentions a CVE exploits it. Use this when it matters that a PoC is real — before telling a user 'working exploit code exists', or when find_github_pocs returned low-star results you cannot judge. Each repo gets a verdict: 'confirmed' (names the CVE in code AND ships runnable code), 'likely' (a writeup, no code), 'unverified' (has code but never names this CVE — unproven, not disproven), or 'unrelated' (an awesome-list / notes index). Only 'confirmed' claims the repo exploits the CVE. Also returns the language derived from file extensions, with no GitHub API calls. REQUIRES the operator to have set POCMAP_ALLOW_FETCH_POC_SOURCE=1, because it downloads third-party exploit code to disk; if unset the tool returns an error saying so — report that to the user rather than retrying.
+Read the SOURCE of the top GitHub PoC repositories for a CVE and report what each one actually contains, instead of trusting that a repo which mentions a CVE exploits it. Use this when it matters that a PoC is real — before telling a user 'working exploit code exists', or when find_github_pocs returned low-star results you cannot judge. Each repo gets a verdict: 'confirmed' (names the CVE in code AND ships runnable code), 'likely' (a writeup, no code), 'unverified' (has code but never names this CVE — unproven, not disproven), or 'unrelated' (an awesome-list / notes index). Only 'confirmed' claims the repo exploits the CVE. Also returns the language derived from file extensions, with no GitHub API calls. IMPORTANT — OPT-IN REQUIRED: set POCMAP_ALLOW_FETCH_POC_SOURCE=1 in the MCP server environment before calling this tool. It downloads third-party exploit code to disk; if the flag is unset the tool returns an explicit error — tell the user to enable the env var (do not retry blindly or invent verdicts).
 
 **Input schema**
 

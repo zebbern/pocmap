@@ -13,16 +13,23 @@ from pocmap.mcp.server import _svc
     name="generate_json_report",
     description=(
         "Full assessment for one or more known CVE IDs in a single call: description, "
-        "CVSS, EPSS, KEV, exploits across GitHub/Metasploit/ExploitDB/Nuclei (plus plugins), "
-        "practice labs, and bug bounty reports. Each entry includes triage "
-        "(priority/reasons/next_actions) plus a sources block (ok/empty/rate_limited/error) "
-        "so an empty exploit list is never a silent negative. Prefer this for a complete "
-        "picture or multi-CVE prioritization — not when they only asked for a PoC "
-        "(use find_github_pocs). Cold start / first call can take 10–30s. "
-        "Accepts comma-separated IDs. Suitable for automation, CI/CD, and dashboards."
+        "CVSS, EPSS, KEV, exploits across Metasploit/ExploitDB/Nuclei first then capped "
+        "GitHub PoCs, practice labs, and bug bounty reports. Defaults drop "
+        "labels=['index'] repos and keep top GitHub hits by trust_score (max_github=15) "
+        "so famous-CVE reports stay agent-usable; each entry has exploit_trim counts. "
+        "Also includes triage (priority/reasons/next_actions) and sources "
+        "(ok/empty/rate_limited/error). Prefer this for a complete picture — not when "
+        "they only asked for a PoC (use find_github_pocs). Cold start 10–30s. "
+        "Accepts comma-separated IDs."
     ),
 )
-def generate_json_report(cve_ids: str) -> dict[str, Any]:
+def generate_json_report(
+    cve_ids: str,
+    include_github: bool = True,
+    max_github: int = 15,
+    min_trust_score: float = 0.0,
+    include_index_repos: bool = False,
+) -> dict[str, Any]:
     """Generate a JSON report for one or more CVEs.
 
     Args:
@@ -30,13 +37,15 @@ def generate_json_report(cve_ids: str) -> dict[str, Any]:
             (e.g. 'CVE-2021-44228' for a single CVE,
             or 'CVE-2021-44228,CVE-2023-44487,CVE-2024-21413'
             for multiple CVEs). Whitespace around commas is trimmed.
+        include_github: Include GitHub PoCs (default True).
+        max_github: Max GitHub repos kept after ranking (default 15).
+        min_trust_score: Drop exploits below this trust_score (default 0).
+        include_index_repos: Keep labels containing ``index`` (default False).
 
     Returns:
         JSON-formatted vulnerability report containing for each CVE:
-        cve_info (description, CVSS, EPSS, KEV), exploits (all registered
-        sources including plugins), labs, bug bounty reports, and a sources
-        health block. The top-level object also includes generated_at,
-        total_requested, total_entries, and any errors encountered.
+        cve_info (description, CVSS, EPSS, KEV), exploits (shaped for agents),
+        labs, bug bounty reports, sources health, and exploit_trim.
     """
     try:
         ids = [c.strip().upper() for c in cve_ids.split(",") if c.strip()]
@@ -46,7 +55,13 @@ def generate_json_report(cve_ids: str) -> dict[str, Any]:
                 "category": "invalid_input",
                 "hint": "Provide one or more comma-separated CVE IDs, e.g. 'CVE-2021-44228,CVE-2023-44487'",
             })
-        return _svc.generate_json_report(ids)
+        return _svc.generate_json_report(
+            ids,
+            include_github=include_github,
+            max_github=max(0, max_github),
+            min_trust_score=max(0.0, min_trust_score),
+            include_index_repos=include_index_repos,
+        )
     except Exception as e:
         return _tool_error(e, f"generate_json_report({cve_ids})")
 
@@ -55,20 +70,28 @@ def generate_json_report(cve_ids: str) -> dict[str, Any]:
     name="generate_html_report",
     description=(
         "Generate a comprehensive HTML vulnerability report for one or more CVEs. "
-        "The report includes styled cards with CVE details (description, CVSS, EPSS, KEV status), "
-        "all discovered exploits and PoCs with source badges, available practice labs, "
-        "and bug bounty reports. The HTML is self-contained with embedded CSS for immediate viewing. "
-        "Use this tool when creating human-readable reports for stakeholders, security teams, "
-        "or documentation. The HTML report can be saved to a file and opened in any browser."
+        "Uses the same agent-friendly exploit shaping as generate_json_report "
+        "(Metasploit/EDB/Nuclei first, capped GitHub, index repos omitted by default). "
+        "The HTML is self-contained with embedded CSS for immediate viewing."
     ),
 )
-def generate_html_report(cve_ids: str) -> dict[str, Any]:
+def generate_html_report(
+    cve_ids: str,
+    include_github: bool = True,
+    max_github: int = 15,
+    min_trust_score: float = 0.0,
+    include_index_repos: bool = False,
+) -> dict[str, Any]:
     """Generate an HTML report for one or more CVEs.
 
     Args:
         cve_ids: Comma-separated list of CVE identifiers
             (e.g. 'CVE-2021-44228' or 'CVE-2021-44228,CVE-2023-44487').
             Whitespace around commas is trimmed.
+        include_github: Include GitHub PoCs (default True).
+        max_github: Max GitHub repos kept after ranking (default 15).
+        min_trust_score: Drop exploits below this trust_score (default 0).
+        include_index_repos: Keep labels containing ``index`` (default False).
 
     Returns:
         Self-contained HTML vulnerability report with embedded CSS.
@@ -85,6 +108,12 @@ def generate_html_report(cve_ids: str) -> dict[str, Any]:
                 "category": "invalid_input",
                 "hint": "Provide one or more comma-separated CVE IDs, e.g. 'CVE-2021-44228,CVE-2023-44487'",
             })
-        return _svc.generate_html_report(ids)
+        return _svc.generate_html_report(
+            ids,
+            include_github=include_github,
+            max_github=max(0, max_github),
+            min_trust_score=max(0.0, min_trust_score),
+            include_index_repos=include_index_repos,
+        )
     except Exception as e:
         return _tool_error(e, f"generate_html_report({cve_ids})")

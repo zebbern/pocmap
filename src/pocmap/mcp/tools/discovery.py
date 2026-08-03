@@ -18,8 +18,8 @@ from pocmap.mcp.server import _svc
         "Results are grouped by confidence: confirmed_affected (vendor+product+version match), "
         "possibly_affected (vendor or product match but version unclear), and "
         "not_enough_data (insufficient product/version info). "
-        "This tool searches the NVD database using keyword search and applies "
-        "fuzzy product name matching and version constraint parsing for accurate results."
+        "When all buckets are empty, why_empty.reason explains whether CPE resolved "
+        "but NVD returned no version hits vs resolution failed (empty ≠ absent)."
     ),
 )
 def discover_product_cves(

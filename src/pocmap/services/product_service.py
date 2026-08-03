@@ -206,6 +206,15 @@ class ProductDiscoveryService:
         result.total_found = len(candidate_cves)
         result.search_sources = sources
         result.matched_cpes = matched_cpes
+        result.why_empty = _discovery_why_empty(
+            candidate_count=len(candidate_cves),
+            confirmed=len(result.confirmed_affected),
+            possible=len(result.possibly_affected),
+            unknown=len(result.not_enough_data),
+            matched_cpes=matched_cpes,
+            sources=sources,
+            has_version=v_constraint is not None,
+        )
 
         return result
 
@@ -870,6 +879,59 @@ def _version_text(constraint: VersionConstraint) -> str | None:
     return ".".join(parts) if parts else None
 
 
+def _discovery_why_empty(
+    *,
+    candidate_count: int,
+    confirmed: int,
+    possible: int,
+    unknown: int,
+    matched_cpes: list[str],
+    sources: list[str],
+    has_version: bool,
+) -> dict[str, str] | None:
+    """Explain an all-empty discovery result; ``None`` when results exist."""
+    if confirmed or possible or unknown:
+        return None
+    if not matched_cpes and "nvd_keyword_search" in sources:
+        return {
+            "reason": "no_cpe_resolved",
+            "detail": (
+                "Product could not be resolved to a CPE; keyword search also "
+                "returned no categorizable CVEs."
+            ),
+        }
+    if matched_cpes and candidate_count == 0:
+        if has_version:
+            return {
+                "reason": "no_cves_for_cpe_version",
+                "detail": (
+                    "Resolved CPE(s) "
+                    + ", ".join(matched_cpes)
+                    + " but NVD returned no CVEs for the requested version bounds."
+                ),
+            }
+        return {
+            "reason": "nvd_returned_zero",
+            "detail": (
+                "Resolved CPE(s) "
+                + ", ".join(matched_cpes)
+                + " but NVD returned no CVEs for that product."
+            ),
+        }
+    if candidate_count > 0:
+        return {
+            "reason": "no_version_match",
+            "detail": (
+                f"Analyzed {candidate_count} candidate CVE(s) but none matched "
+                "the product/version confidence tiers."
+            ),
+        }
+    return {
+        "reason": "no_results",
+        "detail": "No CVEs found for this product query.",
+    }
+
+
 def _cpe_search_params(
     vendor: str, product: str, constraint: VersionConstraint | None
 ) -> dict[str, str | int]:
@@ -920,8 +982,16 @@ def _cpe_search_params(
         params["versionEndType"] = "excluding"
         return params
 
-    # Fully specified: ask NVD for that exact CPE version.
-    params["virtualMatchString"] = f"{base}:{version}"
+    # Fully specified installed version: NVD requires version bounds with a
+    # version-FREE virtualMatchString. Embedding ":1.18.0" in the match string
+    # returns 0 for products whose match criteria use ranges (nginx/f5, etc.).
+    # Use the same half-open [v, next_patch) form as the documented "version 2.6"
+    # example (start including / end excluding).
+    upper = ".".join(str(p) for p in numeric[:-1] + [numeric[-1] + 1])
+    params["versionStart"] = version
+    params["versionStartType"] = "including"
+    params["versionEnd"] = upper
+    params["versionEndType"] = "excluding"
     return params
 
 

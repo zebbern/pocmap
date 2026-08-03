@@ -329,7 +329,7 @@ def test_github_search_fallback_when_indexes_empty() -> None:
     assert len(result) == 1
     assert result[0].url == "https://github.com/zebbernCVE/CVE-2026-26832"
     assert http._search_calls  # type: ignore[attr-defined]
-    assert http._search_calls[0]["params"]["q"] == "CVE-2026-26832"  # type: ignore[attr-defined]
+    assert http._search_calls[0]["params"]["q"] == '"CVE-2026-26832"'  # type: ignore[attr-defined]
 
 
 def test_github_search_not_called_when_indexes_have_results() -> None:
@@ -397,6 +397,34 @@ def test_github_search_retries_unauthenticated_after_401() -> None:
 
     assert [ex.url for ex in result] == ["https://github.com/zebbernCVE/CVE-2026-26832"]
     assert calls == [True, False]
+
+
+def test_cve_id_mentioned_rejects_longer_digit_suffix() -> None:
+    from pocmap.clients.github_client import cve_id_mentioned
+
+    assert cve_id_mentioned("CVE-2026-3141", "Rat5ak/CVE-2026-31413-BPF") is False
+    assert cve_id_mentioned("CVE-2026-3141", "owner/CVE-2026-3141-poc") is True
+    assert cve_id_mentioned("CVE-2021-44228", "CVE-2021-44228-Scanner") is True
+
+
+def test_github_search_rejects_prefix_cve_false_positives() -> None:
+    """CVE-2026-3141 must not accept a CVE-2026-31413 Search hit."""
+    client, _http = _empty_index_client(
+        search_payload={
+            "items": [
+                {
+                    "full_name": "Rat5ak/CVE-2026-31413-BPF-Container-Escape",
+                    "html_url": (
+                        "https://github.com/Rat5ak/CVE-2026-31413-BPF-Container-Escape"
+                    ),
+                    "description": "CVE-2026-31413: BPF verifier bug",
+                    "stargazers_count": 1,
+                    "forks_count": 0,
+                }
+            ]
+        }
+    )
+    assert client.search_pocs("CVE-2026-3141") == []
 
 
 def test_github_search_filters_aggregator_hits() -> None:

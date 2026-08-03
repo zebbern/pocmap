@@ -613,7 +613,14 @@ class RecentService:
             ``ok`` / ``empty`` / ``error`` / ``rate_limited``.
         """
         result: list[CVEInfo] = []
-        poc_check = {"ok": 0, "empty": 0, "error": 0, "rate_limited": 0}
+        # ``unknown`` = retained after rate-limit (not dropped as "no PoC").
+        poc_check = {
+            "ok": 0,
+            "empty": 0,
+            "error": 0,
+            "rate_limited": 0,
+            "unknown": 0,
+        }
 
         def _check(cve: CVEInfo) -> tuple[CVEInfo | None, str]:
             try:
@@ -622,7 +629,9 @@ class RecentService:
                     return cve, "ok"
                 return None, "empty"
             except RateLimitError:
-                return None, "rate_limited"
+                # Keep the CVE: throttling ≠ "no public PoC". Callers see
+                # poc_check.unknown / rate_limited and treat has_poc cautiously.
+                return cve, "rate_limited"
             except Exception as exc:
                 if is_programming_error(exc) or isinstance(exc, OfflineError):
                     raise
@@ -634,6 +643,8 @@ class RecentService:
             for future in as_completed(futures):
                 cve_result, status = future.result()
                 poc_check[status] = poc_check.get(status, 0) + 1
+                if status == "rate_limited":
+                    poc_check["unknown"] = poc_check.get("unknown", 0) + 1
                 if cve_result is not None:
                     result.append(cve_result)
 

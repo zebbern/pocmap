@@ -299,8 +299,15 @@ def test_cpe_search_params_without_constraint_is_the_bare_match_string() -> None
     assert _params(None) == {"virtualMatchString": "cpe:2.3:*:f5:nginx"}
 
 
-def test_cpe_search_params_exact_version_is_embedded_in_the_match_string() -> None:
-    assert _params("2.14.1") == {"virtualMatchString": "cpe:2.3:*:f5:nginx:2.14.1"}
+def test_cpe_search_params_exact_version_uses_half_open_bounds() -> None:
+    # NVD forbids embedding the version in virtualMatchString with range params.
+    assert _params("2.14.1") == {
+        "virtualMatchString": "cpe:2.3:*:f5:nginx",
+        "versionStart": "2.14.1",
+        "versionStartType": "including",
+        "versionEnd": "2.14.2",
+        "versionEndType": "excluding",
+    }
 
 
 def test_cpe_search_params_range_operators_map_to_version_bounds() -> None:

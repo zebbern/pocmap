@@ -283,14 +283,19 @@ is the nuclei invocation (`null` when the template path is unknown).
 **Purpose**: Everything known about one or more CVEs, in a single call.
 **When to use**: Full assessment / prioritization / compare several CVEs — not a PoC-only
 ask (use `find_github_pocs` or the matching DB tool first). One round trip for CVE details,
-all registered exploit sources (built-ins + plugins), labs, and bug bounty reports.
+exploit sources (Metasploit/EDB/Nuclei first, then capped GitHub), labs, and bug bounty.
 **Parameters**:
 - `cve_ids` (str, required): Comma-separated CVE IDs, e.g. `"CVE-2021-44228,CVE-2021-45046"`
+- `include_github` (bool, default true): Include GitHub PoCs
+- `max_github` (int, default 15): Cap GitHub repos after `trust_score` ranking
+- `min_trust_score` (float, default 0): Drop weaker exploit rows
+- `include_index_repos` (bool, default false): Keep `labels: ["index"]` repos
 **Returns**: JSON with `generated_at`, `total_requested`, `total_entries`, `total_errors`,
 `entries` (list of **ReportEntry**), and `errors` (list of `{cve_id, error}` for CVEs whose
-lookup failed). Each entry is `{cve_info, exploits, labs, bb_reports, sources, triage}` —
-normalized `cve_info` (includes `triage`); **always read `sources`** before treating an
-empty exploit list as "none found". Cold start can take 10–30s.
+lookup failed). Each entry is
+`{cve_info, exploits, labs, bb_reports, sources, triage, exploit_trim}` —
+**always read `sources`** before treating an empty exploit list as "none found".
+Cold start can take 10–30s.
 **Example**:
 ```json
 {"generated_at": "2024-01-15T09:30:00Z", "total_requested": 1,

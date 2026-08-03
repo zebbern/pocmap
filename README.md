@@ -1,6 +1,6 @@
 # PocMap
 
-[![Version](https://img.shields.io/badge/version-2.8.1-blue.svg)](https://github.com/zebbern/pocmap)
+[![Version](https://img.shields.io/badge/version-2.8.2-blue.svg)](https://github.com/zebbern/pocmap)
 [![PyPI](https://img.shields.io/pypi/v/pocmap.svg)](https://pypi.org/project/pocmap/)
 [![Docs](https://img.shields.io/badge/docs-zebbern.github.io-blue.svg)](https://zebbern.github.io/pocmap/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)

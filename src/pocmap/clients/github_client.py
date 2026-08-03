@@ -89,6 +89,21 @@ def _is_aggregator(url: str) -> bool:
     return bool(_AGGREGATOR_NAME_RE.search(name))
 
 
+def cve_id_mentioned(cve_id: str, *texts: str | None) -> bool:
+    """True when *cve_id* appears as a whole CVE token in any of *texts*.
+
+    Rejects prefix false positives such as ``CVE-2026-3141`` matching
+    ``CVE-2026-31413-BPF-...`` (GitHub Search substring hits).
+    """
+    cve = (cve_id or "").strip().upper()
+    if not cve:
+        return False
+    # Digits after the id must not continue (3141 vs 31413); letters/underscore
+    # after are fine (CVE-2021-44228-Scanner).
+    pattern = re.compile(rf"(?<![A-Z0-9]){re.escape(cve)}(?![0-9])", re.IGNORECASE)
+    return any(bool(pattern.search(t)) for t in texts if t)
+
+
 def _repo_key(url: str) -> str:
     """Normalized identity for a repo URL, for cross-source dedup."""
     return url.rstrip("/").lower()
@@ -126,7 +141,6 @@ def exploits_from_reference_urls(urls: Iterable[str], cve_id: str) -> list[Explo
     in the URL. Aggregator indexes are rejected.
     """
     cve_norm = cve_id.upper().strip()
-    cve_lower = cve_norm.lower()
     seen: set[str] = set()
     out: list[Exploit] = []
     for raw in urls:
@@ -138,8 +152,10 @@ def exploits_from_reference_urls(urls: Iterable[str], cve_id: str) -> list[Explo
             continue
         path_lower = urlparse(repo_url).path.lower()
         repo_name = path_lower.rstrip("/").rsplit("/", 1)[-1]
-        cve_in_path = cve_lower in path_lower
-        poc_named = bool(_POC_NAME_RE.search(repo_name)) and cve_lower in str(raw).lower()
+        cve_in_path = cve_id_mentioned(cve_norm, path_lower)
+        poc_named = bool(_POC_NAME_RE.search(repo_name)) and cve_id_mentioned(
+            cve_norm, str(raw)
+        )
         if not (cve_in_path or poc_named):
             continue
         seen.add(key)
@@ -273,6 +289,11 @@ class GitHubClient:
                 if not url or _is_aggregator(url):
                     continue
                 title = repo.get("description") or repo.get("full_name") or "N/A"
+                full_name = repo.get("full_name") or ""
+                # Search is substring-based; require an exact CVE token in the
+                # repo identity or description before accepting the hit.
+                if not cve_id_mentioned(cve_id, url, full_name, title):
+                    continue
                 stars = repo.get("stargazers_count", 0) or 0
                 forks = repo.get("forks_count", 0) or 0
                 labels = classify_poc_labels(title if title != "N/A" else None, url)
@@ -355,7 +376,9 @@ class GitHubClient:
         ``GITHUB_API_TOKEN``.
         """
         url = f"{GITHUB_API_BASE}/search/repositories"
-        params = {"q": cve_id, "per_page": _SEARCH_PER_PAGE}
+        # Quoted query reduces (but does not eliminate) longer-id prefix hits;
+        # :func:`cve_id_mentioned` is the hard filter after results return.
+        params = {"q": f'"{cve_id}"', "per_page": _SEARCH_PER_PAGE}
         try:
             data = self._client.get_json(
                 url,

@@ -17,7 +17,8 @@ from pocmap.mcp.server import _svc
         "then enriches each CVE with CVSS scoring, CISA KEV status, and PoC availability from GitHub. "
         "Results can be filtered by severity, KEV status, minimum EPSS score, and PoC availability. "
         "Response includes filter_stats (fetched/after_severity/after_epss/after_poc/returned and "
-        "poc_check ok/empty/error/rate_limited counts) so empty only_with_poc results are explainable. "
+        "poc_check ok/empty/error/rate_limited/unknown counts). Rate-limited PoC checks are "
+        "kept as poc_unknown (not dropped as 'no PoC'). "
         "Each cve_info includes a triage summary. Cold start / first call can take 10–30s. "
         "Use for emerging threats, disclosure monitoring, or daily/weekly briefings."
     ),
