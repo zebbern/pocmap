@@ -171,6 +171,10 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - When a known issue is clearly large or important, address it in the current pass rather than parking it for later.
 - Prefer the smallest change that delivers the sought result; avoid extra packaging splits or restructures unless necessary.
 - Prefer verifying MCP and CLI with multiple real use-case runs (including light stress of live paths), not only offline/unit tests.
+- Prefer shipping related improvements in one versioned release rather than a series of intermediate PyPI bumps.
+- When tightening ranking, filters, or severity logic, verify that legitimate PoC/CVE recall is preserved—not only that bad rows are removed.
+- Prefer a slim README (~150–200 lines) that links out to MkDocs/docs/skills instead of embedding full reference material.
+- Be sure with fresh runtime evidence before cutting a PyPI release or removing debug instrumentation.
 
 ## Learned Workspace Facts
 
@@ -178,5 +182,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - Canonical MCP/agent tool contract is `.claude/skills/pocmap-agent/references/mcp_tools.md`; CLAUDE.md, README, and skills should point there and stay aligned with the live server (dict/`structuredContent` returns, current tool inventory, SDK naming).
 - For agent workflows, prefer MCP tools over the CLI when a unified response shape matters.
 - Product priority for exploit/PoC discovery: maximize recall through MCP so researchers do not need to hunt GitHub or other sources manually.
+- README is an onboarding surface; deep guides live on the MkDocs site (https://zebbern.github.io/pocmap/).
+- Keep `.claude/skills/pocmap-agent` tracked in git for consumers; other `.claude/**` and `.cursor/` are gitignored.
+- Preserve per-source health signals (`ok` / `empty` / errors) in MCP responses—they prevent false "no exploit exists" conclusions.
+- After a PyPI release, Cursor MCP via `uvx` needs a server restart to pick up the new version; empty GitHub PoC results can be rate-limit or env issues, not only code bugs.
 
 @README.md - Info about Project

@@ -31,6 +31,7 @@ else:
     from typing_extensions import Self
 
 from pocmap.utils import validators as _validators
+from pocmap.utils.poc_labels import classify_poc_labels, trust_score
 
 # ---------------------------------------------------------------------------
 # Validation constants and helpers
@@ -565,6 +566,12 @@ class Exploit(BaseModel):
         stars: GitHub star count (if applicable).
         forks: GitHub fork count (if applicable).
         rank: Metasploit exploit rank (if applicable).
+        labels: Heuristic quality labels (scanner/poc/writeup/…).
+        last_commit: ISO timestamp of last push (GitHub), when known.
+        trust_score: Heuristic trust in ``[0.0, 1.0]``.
+        module_path: Metasploit module filesystem path, when known.
+        module_type: Metasploit module type (exploit/auxiliary/…), when known.
+        platform: Metasploit target platform list/string, when known.
     """
 
     source: ExploitSource = Field(..., description="Exploit source")
@@ -578,52 +585,134 @@ class Exploit(BaseModel):
         default=None,
         description="CLI command to run the exploit (e.g., msfconsole command)",
     )
+    labels: list[str] = Field(
+        default_factory=list,
+        description="Heuristic PoC quality labels (scanner, poc, writeup, …)",
+    )
+    last_commit: str | None = Field(
+        default=None,
+        description="Last repository push time (ISO-8601), when known",
+    )
+    trust_score: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Heuristic trust score in [0.0, 1.0]",
+    )
+    module_path: str | None = Field(
+        default=None,
+        description="Metasploit module path on disk, when known",
+    )
+    module_type: str | None = Field(
+        default=None,
+        description="Metasploit module type (exploit, auxiliary, …)",
+    )
+    platform: str | None = Field(
+        default=None,
+        description="Metasploit platform target(s), when known",
+    )
 
     @classmethod
     def from_github_repo(cls, repo_data: dict[str, Any]) -> Self:
         """Create an Exploit from a GitHub API repository response."""
+        url = repo_data.get("html_url", "")
+        title = repo_data.get("description") or "N/A"
+        stars = repo_data.get("stargazers_count", 0) or 0
+        forks = repo_data.get("forks_count", 0) or 0
+        pushed = repo_data.get("pushed_at")
+        last_commit = str(pushed) if isinstance(pushed, str) and pushed else None
+        labels = classify_poc_labels(title if title != "N/A" else None, url)
         return cls(
             source=ExploitSource.GITHUB,
-            url=repo_data.get("html_url", ""),
-            title=repo_data.get("description") or "N/A",
+            url=url,
+            title=title,
             language=repo_data.get("language") or "N/A",
-            stars=repo_data.get("stargazers_count", 0) or 0,
-            forks=repo_data.get("forks_count", 0) or 0,
+            stars=stars,
+            forks=forks,
+            labels=labels,
+            last_commit=last_commit,
+            trust_score=trust_score(
+                stars=stars, forks=forks, last_commit=last_commit, labels=labels
+            ),
         )
 
     @classmethod
     def from_exploitdb(cls, exploit_id: str, file_path: str) -> Self:
         """Create an Exploit from an ExploitDB entry."""
+        title = file_path
+        url = f"https://www.exploit-db.com/exploits/{exploit_id}"
+        labels = classify_poc_labels(title, url) or ["poc"]
         return cls(
             source=ExploitSource.EXPLOITDB,
-            url=f"https://www.exploit-db.com/exploits/{exploit_id}",
-            title=file_path,
+            url=url,
+            title=title,
             command=f"searchsploit -m {exploit_id}",
+            labels=labels,
+            trust_score=trust_score(labels=labels),
         )
 
     @classmethod
-    def from_metasploit(cls, fullname: str, rank: str) -> Self:
+    def from_metasploit(
+        cls,
+        fullname: str,
+        rank: str,
+        *,
+        name: str | None = None,
+        path: str | None = None,
+        module_type: str | None = None,
+        platform: str | list[str] | None = None,
+    ) -> Self:
         """Create an Exploit from a Metasploit module entry."""
         rank_map = {
             "600": MSFRank.EXCELLENT, "500": MSFRank.GREAT, "400": MSFRank.GOOD,
             "300": MSFRank.NORMAL, "200": MSFRank.AVERAGE, "100": MSFRank.LOW,
+            "0": MSFRank.UNKNOWN,
         }
+        platform_s: str | None
+        if isinstance(platform, list):
+            platform_s = ", ".join(str(p) for p in platform if p) or None
+        else:
+            platform_s = str(platform) if platform else None
+
+        # Prefer the human module name; keep fullname for URL/command.
+        title = name or fullname
+        inferred_type = module_type
+        if not inferred_type and "/" in fullname:
+            inferred_type = fullname.split("/", 1)[0]
+        labels = classify_poc_labels(title, fullname)
+        if inferred_type and "scanner" in inferred_type.lower():
+            if "scanner" not in labels:
+                labels = [*labels, "scanner"]
+        elif "poc" not in labels and "scanner" not in labels:
+            labels = [*labels, "poc"]
+
         return cls(
             source=ExploitSource.METASPLOIT,
             url=f"https://www.rapid7.com/db/modules/{fullname}",
-            title=fullname,
+            title=title,
             rank=rank_map.get(str(rank), MSFRank.UNKNOWN),
             command=f"msfconsole -q -x 'use {fullname}'",
+            labels=labels,
+            trust_score=trust_score(labels=labels),
+            module_path=path or fullname,
+            module_type=inferred_type,
+            platform=platform_s,
         )
 
     @classmethod
     def from_nuclei(cls, template_path: str, url: str) -> Self:
         """Create an Exploit from a Nuclei template entry."""
+        title = template_path or "Nuclei template"
+        labels = classify_poc_labels(title, url)
+        if "scanner" not in labels:
+            labels = [*labels, "scanner"]
         return cls(
             source=ExploitSource.NUCLEI,
             url=url,
-            title=template_path or "Nuclei template",
+            title=title,
             command=f"nuclei -t {template_path} [-u <target>]" if template_path else None,
+            labels=labels,
+            trust_score=trust_score(labels=labels),
         )
 
 

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-08-03
+
+Agent-facing exploit quality signals, Metasploit detail, recent filter explainability,
+triage summaries, package dual-ID clarity, and lab setup passthrough — one feature cut
+(no intermediate version drip).
+
+### Added
+
+- **PoC quality on listings:** `labels` (`scanner` / `poc` / `vulnerable-app` /
+  `writeup` / `index`), `last_commit`, and `trust_score` on Exploit / MCP exploit
+  payloads (title+URL heuristics; `verify_github_pocs` folds evidence verdicts into
+  trust). GitHub Search-fallback path is quoted in `sources[].detail`.
+- **Metasploit specificity:** `module_path`, `module_type`, `platform`, richer
+  `title`; `find_metasploit_module` returns `modules[]` (all matches up to `limit`)
+  plus best-ranked `module`.
+- **Triage object** on normalized CVE info and report entries:
+  `{priority, reasons, next_actions}` from severity / KEV / EPSS / PoC counts.
+- **`filter_stats`** on `find_recent_exploits` (`fetched`, `after_severity`,
+  `after_epss`, `after_poc`, `returned`, `poc_check` counts) so empty
+  `only_with_poc` is not a silent “nothing exists”.
+- **`canonical_cve`** on package vulnerability MCP rows (first CVE in `cve_ids`).
+- **Lab `setup_instructions`** passthrough on `find_practice_labs`.
+- **Description product fallback** when CPE/CNA product names are blank (parse
+  advisory prose / reference titles; no new GHSA HTTP dependency).
+
+### Changed
+
+- MCP tool descriptions note cold-start latency and new response fields.
+- Agent docs (`mcp_tools.md`, skill, README badge/workflow) updated for 2.8.0.
+
 ## [2.7.1] - 2026-08-03
 
 Smoke-test fixes for recent-CVE severity accuracy, primary affected product ranking,

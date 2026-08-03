@@ -40,7 +40,9 @@ from pocmap.utils.formatters import (
 
 def _render_text(table: object) -> str:
     """Render a Rich renderable to plain text (styles stripped)."""
-    console = Console(width=200, record=True)
+    # ``force_terminal`` keeps width=200 on Windows where record mode otherwise
+    # collapses to a narrow legacy console and truncates CVE / severity cells.
+    console = Console(width=200, record=True, force_terminal=True)
     console.print(table)
     return console.export_text()
 

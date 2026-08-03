@@ -54,8 +54,10 @@ with CVEService() as svc:
 | Recent CVEs / monitoring | `find_recent_exploits` | `pocmap latest --since 24h` |
 | CVEs for a deployed product | `discover_product_cves` | `pocmap discover "Product"` |
 | CVEs for a dependency / lockfile | `discover_package_cves` | — |
-| GitHub PoCs (+ `sources` health) | `find_github_pocs` | (shown in `lookup`) |
-| Metasploit / ExploitDB / Nuclei | `find_metasploit_module` / `find_exploitdb_entry` / `find_nuclei_template` | — |
+| GitHub PoCs (+ `labels`/`trust_score`/`sources`) | `find_github_pocs` | (shown in `lookup`) |
+| Metasploit (multi-module; path/type) | `find_metasploit_module` (`limit`>1) | — |
+| ExploitDB / Nuclei | `find_exploitdb_entry` / `find_nuclei_template` | — |
+| Prioritize known CVE IDs | `generate_json_report` → read `triage` | — |
 | How it is exploited (ATT&CK) | `get_attack_techniques` | — |
 | Verify PoC is real | `verify_github_pocs` (needs `POCMAP_ALLOW_FETCH_POC_SOURCE=1`) | — |
 | KEV / EPSS | `check_kev_status` / `get_epss_score` | — |
@@ -76,9 +78,10 @@ with CVEService() as svc:
 - **`--since`:** `1h`, `24h`, `7d`, `30d`. **Severity:** `critical|high|medium|low`.
 - **Product vs package:** `discover_product_cves` = deployed product (nginx, Confluence).
   `discover_package_cves` = dependency/SBOM (PyPI/npm/Maven/…) — only tool with fix versions.
-- **Silent negatives:** always read `sources` / error `category` before concluding "none".
-  Empty + `rate_limited`/`error` means *unknown*, not *none*. Empty ATT&CK list means
-  *unmapped*, not harmless.
+- **Silent negatives:** always read `sources` / error `category` / recent `filter_stats.poc_check`
+  before concluding "none". Empty + `rate_limited`/`error` means *unknown*, not *none*.
+  Empty ATT&CK list means *unmapped*, not harmless.
+- **Package dual IDs:** use `canonical_cve` + `aliases` on `discover_package_cves` rows.
 
 > **Env vars for MCP.** Clients launch the server with a filtered env. Put
 > `GITHUB_API_TOKEN` / `NVD_API_KEY` / `POCMAP_*` in the client config `env` block —

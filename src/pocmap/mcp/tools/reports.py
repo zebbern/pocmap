@@ -14,14 +14,12 @@ from pocmap.mcp.server import _svc
     description=(
         "Full assessment for one or more known CVE IDs in a single call: description, "
         "CVSS, EPSS, KEV, exploits across GitHub/Metasploit/ExploitDB/Nuclei (plus plugins), "
-        "practice labs, and bug bounty reports. Prefer this when the user wants a complete "
-        "picture, prioritization, or compare/prioritize several CVEs — not when they only "
-        "asked for a PoC or exploit repo (use find_github_pocs or the matching DB tool "
-        "instead; those are faster and more focused). "
-        "Beats calling lookup_cve + every exploit/lab/bounty tool separately for a full "
-        "write-up. Each entry includes a sources block (ok/empty/rate_limited/error) so an "
-        "empty exploit list is never a silent negative. Accepts comma-separated IDs. "
-        "Also suitable for automation, CI/CD, and dashboards."
+        "practice labs, and bug bounty reports. Each entry includes triage "
+        "(priority/reasons/next_actions) plus a sources block (ok/empty/rate_limited/error) "
+        "so an empty exploit list is never a silent negative. Prefer this for a complete "
+        "picture or multi-CVE prioritization — not when they only asked for a PoC "
+        "(use find_github_pocs). Cold start / first call can take 10–30s. "
+        "Accepts comma-separated IDs. Suitable for automation, CI/CD, and dashboards."
     ),
 )
 def generate_json_report(cve_ids: str) -> dict[str, Any]:

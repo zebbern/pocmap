@@ -32,6 +32,7 @@ from pocmap.clients.github_client import GitHubClient
 from pocmap.clients.nvd_client import NVDClient
 from pocmap.config import NVD_API_BASE, settings
 from pocmap.models import (
+    AffectedProduct,
     CVEInfo,
     CVEState,
     ExploitSource,
@@ -50,6 +51,7 @@ from pocmap.utils.http import (
     RateLimitError,
     is_programming_error,
 )
+from pocmap.utils.product_fallback import infer_vendor_product
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +100,8 @@ class RecentService:
         self._github = github_client or GitHubClient()
         self._client = http_client or HTTPClient(headers=settings.nvd_headers)
         self._cveorg = cveorg_client or CVEOrgClient()
+        # Populated by the latest :meth:`find_recent_cves` call for MCP explainability.
+        self.last_filter_stats: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -207,8 +211,18 @@ class RecentService:
             limit=fetch_limit,
         )
 
+        filter_stats: dict[str, Any] = {
+            "fetched": len(raw_vulns),
+            "after_severity": None,
+            "after_epss": None,
+            "after_poc": None,
+            "returned": 0,
+            "poc_check": None,
+        }
+
         if not raw_vulns:
             logger.info("No CVEs found in the specified time window")
+            self.last_filter_stats = filter_stats
             return []
 
         # Convert raw NVD data to CVEInfo models, dropping failed conversions.
@@ -233,6 +247,7 @@ class RecentService:
                 if self._nvd.cvss_severity_labels(raw) & wanted:
                     kept.append(info)
             cve_infos = kept
+        filter_stats["after_severity"] = len(cve_infos)
 
         # NVD returns neither EPSS nor KEV, so both are enriched from pocmap's
         # cached bulk feeds. Done unconditionally: each is ONE cached download
@@ -244,10 +259,15 @@ class RecentService:
 
         if min_epss is not None and min_epss > 0:
             cve_infos = self._filter_by_epss(cve_infos, min_epss)
+        filter_stats["after_epss"] = len(cve_infos)
 
         # Apply PoC filter
         if only_with_poc:
-            cve_infos = self._filter_by_poc(cve_infos)
+            cve_infos, poc_check = self._filter_by_poc(cve_infos)
+            filter_stats["poc_check"] = poc_check
+            filter_stats["after_poc"] = len(cve_infos)
+        else:
+            filter_stats["after_poc"] = len(cve_infos)
 
         # Sort results
         cve_infos = self._sort_results(cve_infos, sort)
@@ -264,6 +284,8 @@ class RecentService:
                 )
             )
 
+        filter_stats["returned"] = len(results)
+        self.last_filter_stats = filter_stats
         logger.info("Returning %d recent CVE results", len(results))
         return results
 
@@ -574,39 +596,54 @@ class RecentService:
                      len(result), len(cves), min_epss)
         return result
 
-    def _filter_by_poc(self, cves: list[CVEInfo]) -> list[CVEInfo]:
+    def _filter_by_poc(
+        self, cves: list[CVEInfo]
+    ) -> tuple[list[CVEInfo], dict[str, int]]:
         """Filter CVEs to only those with known PoCs on GitHub.
 
         Performs a lightweight GitHub search for each CVE concurrently
-        using a thread pool.
+        using a thread pool. Check outcomes are counted so a rate-limited or
+        failed GitHub is not reported as "no PoCs in the wild".
 
         Args:
             cves: List of CVEInfo objects.
 
         Returns:
-            Filtered list of CVEs that have at least one GitHub PoC.
+            ``(kept_cves, poc_check_counts)`` where counts use keys
+            ``ok`` / ``empty`` / ``error`` / ``rate_limited``.
         """
         result: list[CVEInfo] = []
+        poc_check = {"ok": 0, "empty": 0, "error": 0, "rate_limited": 0}
 
-        def _check(cve: CVEInfo) -> CVEInfo | None:
+        def _check(cve: CVEInfo) -> tuple[CVEInfo | None, str]:
             try:
                 pocs = self._github.search_pocs(cve.id)
-                return cve if pocs else None
+                if pocs:
+                    return cve, "ok"
+                return None, "empty"
+            except RateLimitError:
+                return None, "rate_limited"
             except Exception as exc:
                 if is_programming_error(exc) or isinstance(exc, OfflineError):
                     raise
                 logger.debug("PoC check failed for %s: %s", cve.id, exc)
-                return None
+                return None, "error"
 
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {executor.submit(_check, cve): cve for cve in cves}
             for future in as_completed(futures):
-                cve_result = future.result()
+                cve_result, status = future.result()
+                poc_check[status] = poc_check.get(status, 0) + 1
                 if cve_result is not None:
                     result.append(cve_result)
 
-        logger.debug("PoC filter: %d/%d CVEs have PoCs", len(result), len(cves))
-        return result
+        logger.debug(
+            "PoC filter: %d/%d CVEs have PoCs (checks=%s)",
+            len(result),
+            len(cves),
+            poc_check,
+        )
+        return result, poc_check
 
     # ------------------------------------------------------------------
     # Sorting
@@ -749,6 +786,20 @@ class RecentService:
             affected = _affected_from_nvd(raw_cve)
             vendor, product = _pick_primary_affected(affected, description)
             affected = _prioritize_affected(affected, vendor, product)
+            if vendor is None and product is None:
+                ref_titles = [str(k) for k in references if k]
+                vendor, product = infer_vendor_product(
+                    description or None, reference_titles=ref_titles
+                )
+                # Surface the inferred pair on affected_products so recent rows
+                # are not scalar-only when NVD has not filed CPEs yet.
+                if (vendor or product) and not affected:
+                    affected = [
+                        AffectedProduct(
+                            vendor=vendor or "N/A",
+                            product=product or "N/A",
+                        )
+                    ]
 
             # Publication date
             pub_date = raw_cve.get("published")

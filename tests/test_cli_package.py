@@ -303,9 +303,10 @@ def test_mcp_tool_returns_the_documented_shape(monkeypatch: pytest.MonkeyPatch) 
     data = discover_package_cves("Maven", "org.apache.logging.log4j:log4j-core")
     assert data["ecosystem"] == "Maven"
     vuln = data["vulnerabilities"][0]
-    for key in ("id", "cve_ids", "severity", "cvss_score", "epss_score", "kev_status",
-                "fixed_versions", "has_fix", "url"):
+    for key in ("id", "canonical_cve", "cve_ids", "severity", "cvss_score", "epss_score",
+                "kev_status", "fixed_versions", "has_fix", "url"):
         assert key in vuln, key
+    assert vuln["canonical_cve"] == vuln["cve_ids"][0]
     # epss_score is 0.0-1.0 on the wire to match every other MCP tool.
     assert vuln["epss_score"] == pytest.approx(0.9999)
     assert vuln["fixed_versions"] == ["2.15.0", "2.12.2"]

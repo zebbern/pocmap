@@ -1,6 +1,6 @@
 # PocMap
 
-[![Version](https://img.shields.io/badge/version-2.7.0-blue.svg)](https://github.com/zebbern/pocmap)
+[![Version](https://img.shields.io/badge/version-2.8.0-blue.svg)](https://github.com/zebbern/pocmap)
 [![PyPI](https://img.shields.io/pypi/v/pocmap.svg)](https://pypi.org/project/pocmap/)
 [![Docs](https://img.shields.io/badge/docs-zebbern.github.io-blue.svg)](https://zebbern.github.io/pocmap/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
@@ -131,14 +131,13 @@ pocmap-mcp --debug
 User: "Should I prioritize CVE-2021-44228, CVE-2023-38408, or CVE-2024-21413?"
 
 Agent:
-1. lookup_cve("CVE-2021-44228")     -> CVSS 10.0 CRITICAL, EPSS 0.9753, KEV=true
-2. lookup_cve("CVE-2023-38408")     -> CVSS 9.8 CRITICAL, EPSS 0.3124, KEV=true
-3. lookup_cve("CVE-2024-21413")     -> CVSS 8.8 HIGH, EPSS 0.8912, KEV=true
-4. get_epss_score for each          -> Confirm exploitation probabilities
-5. find_github_pocs for each        -> Count available exploits
-6. check_kev_status for each        -> Confirm KEV status
-7. Prioritize: Log4j (highest EPSS + most exploits) > CVE-2024-21413 > CVE-2023-38408
+1. generate_json_report("CVE-2021-44228,CVE-2023-38408,CVE-2024-21413")
+2. Read each entry's triage.priority / reasons (KEV, EPSS, exploit counts)
+3. Prefer Log4j when triage shows KEV + highest EPSS + most PoCs
 ```
+
+PoC-only ask → `find_github_pocs` (check `labels` / `trust_score` / `sources`).
+Dependency ask → `discover_package_cves` (use `canonical_cve` + `aliases`, not product discovery).
 
 
 Claude Desktop / Cursor JSON configs and transports:

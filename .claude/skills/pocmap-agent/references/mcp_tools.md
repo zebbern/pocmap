@@ -8,21 +8,24 @@ This file is the **canonical MCP / agent consumption guide** (not `AGENTS.md`).
 `src/pocmap/mcp_server.py`; `mcp.server.mcpserver.MCPServer`, mcp SDK 2.x). Tools
 return **dicts** (`structuredContent`), not JSON strings.
 
-Common types: **Exploit**=`{source,url,title,language,stars,forks,rank,command}`
-(`language`/`stars`/`forks` are `null` for every non-GitHub source; `rank` is set only
-for Metasploit; `command` is set only for the Metasploit/ExploitDB/Nuclei sources);
-**BugBountyReport**=`{source,url,has_poc,title}`; **LabEnvironment**=`{platform,name,url}`;
+Common types: **Exploit**=`{source,url,title,language,stars,forks,rank,command,labels,last_commit,trust_score,module_path,module_type,platform}`
+(`language`/`stars`/`forks`/`last_commit` are mainly for GitHub; `rank` /
+`module_*`/`platform` for Metasploit; `command` for Metasploit/ExploitDB/Nuclei;
+`labels` ∈ `scanner|poc|vulnerable-app|writeup|index`; `trust_score` ∈ 0.0–1.0);
+**BugBountyReport**=`{source,url,has_poc,title}`;
+**LabEnvironment**=`{platform,name,url[,setup_instructions]}`;
 **SourceStatus**=`{source,status,count,retryable[,category,detail]}` —
 `status` ∈ `ok|empty|rate_limited|error`;
-**ReportEntry**=`{cve_info,exploits,labs,bb_reports,sources}`;
+**Triage**=`{priority,reasons,next_actions}` (`priority` ∈ `critical|high|medium|low|info`);
+**ReportEntry**=`{cve_info,exploits,labs,bb_reports,sources,triage}`;
 **RecentExploitResult**=`{cve_info,has_poc,poc_sources,discovered_at}`.
 
 > **Normalized CVE shape (all MCP CVE payloads).** `lookup_cve`,
 > `discover_product_cves`, `generate_json_report` entries, and
 > `find_recent_exploits` `cve_info` all use the MCP normalizer: `cvss.score`,
-> `epss_score` on a **0.0–1.0** scale, `references` as a **list**, plus
-> `affected_products`. The `min_epss` *filter* on `find_recent_exploits` stays
-> on the **0–100** scale (input only).
+> `epss_score` on a **0.0–1.0** scale, `references` as a **list**,
+> `affected_products`, plus **`triage`**. The `min_epss` *filter* on
+> `find_recent_exploits` stays on the **0–100** scale (input only).
 
 ---
 ## Core CVE Tools
@@ -139,48 +142,47 @@ code. Do not open with `generate_json_report` for that ask. Always verify before
 - `cve_id` (str, required): CVE identifier
 - `limit` (int, default `10`): Maximum results
 **Returns**: JSON with `cve_id`, `total_count`, `pocs` (list of **Exploit** — the key is
-`pocs`, not `exploits`), and `sources` (per-source health).
+`pocs`, not `exploits`), and `sources` (per-source health; `detail` notes index vs Search).
 **Example**:
 ```json
 {"cve_id": "CVE-2021-44228", "total_count": 1,
  "pocs": [{"source": "github",
   "url": "https://github.com/user/CVE-2021-44228-PoC",
   "title": "Log4j RCE PoC", "language": "Java", "stars": 1200, "forks": 300,
-  "rank": null, "command": null}],
- "sources": [{"source": "github", "status": "ok", "count": 1, "retryable": false}]}
+  "rank": null, "command": null, "labels": ["poc"], "last_commit": "2024-06-01T12:00:00Z",
+  "trust_score": 0.72, "module_path": null, "module_type": null, "platform": null}],
+ "sources": [{"source": "github", "status": "ok", "count": 1, "retryable": false,
+  "detail": "Results from Nomi-sec and/or TrickestCVE indexes"}]}
 ```
 > **Always read `sources` before concluding "no PoCs exist."** Each entry is
-> `{source, status, count, retryable}` plus `category` and `detail` when something went
-> wrong. `status` is one of `ok` (responded, >=1 result), `empty` (responded, 0 results),
-> `rate_limited` (throttled — retry, or set `GITHUB_API_TOKEN`), or `error` (network/HTTP
-> failure). An empty `pocs` with `status: "rate_limited"` means *unknown*, not *none*.
+> `{source, status, count, retryable}` plus `category` and `detail` when useful.
+> `status` is one of `ok` / `empty` / `rate_limited` / `error`. Prefer `labels` +
+> `trust_score` over stars alone; demote `index`/`writeup`. Cold start can take 10–30s.
 >
-> Results union the **Nomi-sec** and **TrickestCVE** indexes (deduped; aggregator repos
-> filtered). When **both indexes are empty**, GitHub Search (`/search/repositories?q=<CVE>`)
-> runs as a recall fallback so index lag is not reported as "no PoCs". PoC-like URLs from
-> the CVE's own references (repo path contains the CVE id, or poc/exploit-named repos that
-> mention the CVE) are merged in as well. **Trust the order**: sorting happens *before*
-> metadata enrichment, so Trickest-only entries (no star/language data) sort last — treat a
-> trailing `stars: null`/`language: null` as an unverified lead. `limit` is applied before
-> enrichment (one GitHub API call per repo; unauthenticated budget 60/hour).
+> Results union **Nomi-sec** + **TrickestCVE**; when both are empty, GitHub Search runs
+> (see `sources.detail`). PoC-like CVE reference URLs are merged in. `limit` applies before
+> enrichment (one GitHub API call per repo).
 ### find_metasploit_module
-**Purpose**: Find a Metasploit module for a CVE.
-**When to use**: When you need a tested exploit framework module with payloads and auxiliary capabilities.
+**Purpose**: Find Metasploit module(s) for a CVE.
+**When to use**: When you need a tested exploit framework module with payloads and auxiliary capabilities. Raise `limit` — one CVE often has scanner + exploit modules.
 **Parameters**:
 - `cve_id` (str, required): CVE identifier
-- `limit` (int, default `1`): Maximum results to scan (1-10)
-**Returns**: JSON with `cve_id`, `found` (bool), `module` (**Exploit** or `null`), `note`.
-The `url` is the Rapid7 module page; `title` is the module fullname; `command` is the
-ready-to-run msfconsole invocation; `rank` is the reliability rating.
+- `limit` (int, default `1`): Maximum modules (1-10)
+**Returns**: JSON with `cve_id`, `found`, `module` (best-ranked), `modules` (list up to limit),
+`total_count`, `note`. Each module includes `module_path`, `module_type`, `platform`,
+`rank`, `command`.
 **Example**:
 ```json
-{"cve_id": "CVE-2021-44228", "found": true,
+{"cve_id": "CVE-2021-44228", "found": true, "total_count": 2,
  "module": {"source": "metasploit",
   "url": "https://www.rapid7.com/db/modules/exploit/multi/http/log4shell_header_injection",
-  "title": "exploit/multi/http/log4shell_header_injection",
+  "title": "Log4Shell HTTP Header Injection",
   "language": null, "stars": null, "forks": null, "rank": "excellent",
-  "command": "msfconsole -q -x 'use exploit/multi/http/log4shell_header_injection'"},
- "note": "Metasploit module available - indicates mature, reliable exploit code."}
+  "command": "msfconsole -q -x 'use exploit/multi/http/log4shell_header_injection'",
+  "labels": ["poc"], "module_path": "modules/exploits/multi/http/log4shell_header_injection.rb",
+  "module_type": "exploit", "platform": "linux, windows"},
+ "modules": ["…same shape…"],
+ "note": "Metasploit module(s) available…"}
 ```
 ### find_exploitdb_entry
 **Purpose**: Find an ExploitDB entry for a CVE.
@@ -286,10 +288,9 @@ all registered exploit sources (built-ins + plugins), labs, and bug bounty repor
 - `cve_ids` (str, required): Comma-separated CVE IDs, e.g. `"CVE-2021-44228,CVE-2021-45046"`
 **Returns**: JSON with `generated_at`, `total_requested`, `total_entries`, `total_errors`,
 `entries` (list of **ReportEntry**), and `errors` (list of `{cve_id, error}` for CVEs whose
-lookup failed). Each entry is `{cve_info, exploits, labs, bb_reports, sources}` —
-normalized `cve_info` (`cvss.score`, `epss_score` 0.0–1.0); `exploits` from
-`ExploitService.find_exploits_with_status` (includes plugins); **always read `sources`**
-before treating an empty exploit list as "none found".
+lookup failed). Each entry is `{cve_info, exploits, labs, bb_reports, sources, triage}` —
+normalized `cve_info` (includes `triage`); **always read `sources`** before treating an
+empty exploit list as "none found". Cold start can take 10–30s.
 **Example**:
 ```json
 {"generated_at": "2024-01-15T09:30:00Z", "total_requested": 1,
@@ -300,10 +301,13 @@ before treating an empty exploit list as "none found".
       "vector_string": "CVSS:3.1/AV:N/..."},
      "epss_score": 0.975, "kev_status": true, "cwes": ["CWE-20"],
      "references": [], "vendor": "Apache", "product": "Log4j2",
-     "affected_products": [], "publication_date": "2021-12-10", "state": "PUBLISHED"},
+     "affected_products": [], "publication_date": "2021-12-10", "state": "PUBLISHED",
+     "triage": {"priority": "critical",
+       "reasons": ["Listed in CISA KEV (known exploited)", "High EPSS (0.975)"],
+       "next_actions": ["Treat as actively exploited; patch or mitigate immediately"]}},
    "exploits": [], "labs": [], "bb_reports": [],
-   "sources": [{"source": "github", "status": "ok", "count": 0, "retryable": false},
-    {"source": "db", "status": "empty", "count": 0, "retryable": false}]}],
+   "triage": {"priority": "critical", "reasons": ["…"], "next_actions": ["…"]},
+   "sources": [{"source": "github", "status": "ok", "count": 0, "retryable": false}]}],
  "errors": []}
 ```
 > **Note**: more than 100 CVEs returns `{"error": ..., "category": "invalid_input"}`.
@@ -339,15 +343,19 @@ before treating an empty exploit list as "none found".
 - `severity` (str, default `""`): `"LOW"`, `"MEDIUM"`, `"HIGH"`, `"CRITICAL"`
 - `sort` (str, default `"cve_date"`): Sort field
 - `limit` (int, default `50`): Maximum results
-**Returns**: JSON with `success` (bool), `total` (int), `query` (the echoed filter
-parameters), and `cves` (list of **RecentExploitResult**). There is no `results` key and no
-`metadata` block.
+**Returns**: JSON with `success`, `total`, `query`, **`filter_stats`**, and `cves`
+(list of **RecentExploitResult**). `filter_stats` has `fetched`, `after_severity`,
+`after_epss`, `after_poc`, `returned`, and optional `poc_check`
+(`ok`/`empty`/`error`/`rate_limited` counts when `only_with_poc`).
 **Example**:
 ```json
 {"success": true, "total": 1,
  "query": {"since": "24h", "from_date": null, "to_date": null,
-  "only_with_poc": false, "kev_only": false, "min_epss": null,
+  "only_with_poc": true, "kev_only": false, "min_epss": null,
   "severity": ["CRITICAL"], "sort": "cve_date", "limit": 50},
+ "filter_stats": {"fetched": 80, "after_severity": 40, "after_epss": 40,
+  "after_poc": 2, "returned": 1,
+  "poc_check": {"ok": 2, "empty": 38, "error": 0, "rate_limited": 0}},
  "cves": [{
    "cve_info": {"id": "CVE-2024-1234", "description": "RCE in...",
      "cvss": {"version": "3.1", "score": 8.8, "severity": "HIGH",
@@ -355,24 +363,23 @@ parameters), and `cves` (list of **RecentExploitResult**). There is no `results`
      "epss_score": 0.45, "kev_status": false, "cwes": [],
      "references": ["https://nvd.nist.gov/..."],
      "vendor": "Acme", "product": "Widget", "publication_date": "2024-01-15",
-     "state": "PUBLISHED", "affected_products": []},
+     "state": "PUBLISHED", "affected_products": [],
+     "triage": {"priority": "high", "reasons": ["CVSS severity HIGH"],
+       "next_actions": ["Confirm affected assets, then patch or mitigate"]}},
    "has_poc": true, "poc_sources": ["github"],
    "discovered_at": "2024-01-16T09:30:00"}]}
 ```
-> **Note**: each item nests the CVE under `cve_info` — nothing is hoisted to the item's top
-> level. `cve_info` uses the **same normalizer** as `lookup_cve` (`cvss.score`,
-> `epss_score` 0.0–1.0, `references` as a list). The `min_epss` *input filter* still uses
-> the 0–100 scale (e.g. `50` = EPSS >= 50%). On failure the tool returns
-> `{"success": false, "error": ...}`.
+> **Note**: empty `only_with_poc` + high `poc_check.rate_limited`/`error` means *unknown*,
+> not *no PoCs*. `min_epss` input stays 0–100. On failure: `{"success": false, "error": ...}`.
 ### discover_package_cves
 **Purpose**: Find vulnerabilities in a software **package** (a dependency) and the exact releases that fix them.
-**When to use**: Any question about a library, lockfile or SBOM entry — `requirements.txt`, `package.json`, `pom.xml`, `go.mod`, `Gemfile`, `Cargo.toml` — or "what should I upgrade to". This is the ONLY tool that returns fixed versions. It CANNOT answer questions about deployed products (nginx, Confluence, FortiOS): use `discover_product_cves` for those.
+**When to use**: Any question about a library, lockfile or SBOM entry — `requirements.txt`, `package.json`, `pom.xml`, `go.mod`, `Gemfile`, `Cargo.toml` — or "what should I upgrade to". This is the ONLY tool that returns fixed versions. It CANNOT answer questions about deployed products (nginx, Confluence, FortiOS): use `discover_product_cves` for those. **Product vs package:** product = deployed appliance/app; package = dependency coordinate.
 **Parameters**:
 - `ecosystem` (str, required): `PyPI`, `npm`, `Go`, `Maven`, `crates.io`, `RubyGems`, `Packagist`, `NuGet`, `Hex`, `Pub`, or a distro (`Debian:12`, `Ubuntu:22.04`, `Alpine:v3.19`, `Red Hat`, `Bitnami`). Case-insensitive; normalized for you.
 - `name` (str, required): Package name. Maven needs the full `groupId:artifactId` — a bare artifact matches nothing and looks falsely clean.
 - `version` (str, default `""`): Installed version. Strongly recommended.
 - `limit` (int, default `50`, max 500): Maximum advisories.
-**Returns**: JSON with `ecosystem`, `package`, `version`, `total_found` (found, before `limit`), `returned`, `truncated`, `fixable_count`, `unfixed_count`, `search_sources` (only feeds that produced data), and `vulnerabilities` — ranked **CISA KEV > EPSS > CVSS**, each with `id`, `cve_ids`, `aliases`, `summary`, `severity`, `cvss_score` (0-10), `cvss_vector`, `epss_score` (**0.0-1.0**), `kev_status`, `fixed_versions`, `introduced_versions`, `has_fix`, `withdrawn`, `published`, `url`.
+**Returns**: JSON with `ecosystem`, `package`, `version`, `total_found` (found, before `limit`), `returned`, `truncated`, `fixable_count`, `unfixed_count`, `search_sources` (only feeds that produced data), and `vulnerabilities` — ranked **CISA KEV > EPSS > CVSS**, each with `id`, **`canonical_cve`** (first CVE or null), `cve_ids`, `aliases`, `summary`, `severity`, `cvss_score` (0-10), `cvss_vector`, `epss_score` (**0.0-1.0**), `kev_status`, `fixed_versions`, `introduced_versions`, `has_fix`, `withdrawn`, `published`, `url`. Same CVE under GHSA + CVE ids is one row after merge — use `canonical_cve` / `aliases`, do not double-count.
 
 Four traps worth knowing:
 1. `fixed_versions` usually lists SEVERAL releases — maintainers backport to every
@@ -390,7 +397,8 @@ Four traps worth knowing:
  "version": "2.14.1", "total_found": 7, "fixable_count": 7, "unfixed_count": 0,
  "search_sources": ["osv", "epss", "cisa_kev"],
  "vulnerabilities": [
-   {"id": "GHSA-jfh8-c2jp-5v3q", "cve_ids": ["CVE-2021-44228"],
+   {"id": "GHSA-jfh8-c2jp-5v3q", "canonical_cve": "CVE-2021-44228",
+    "cve_ids": ["CVE-2021-44228"], "aliases": ["CVE-2021-44228"],
     "severity": "CRITICAL", "cvss_score": 10.0, "epss_score": 0.9999,
     "kev_status": true, "fixed_versions": ["2.15.0", "2.3.1", "2.12.2"],
     "has_fix": true, "url": "https://osv.dev/vulnerability/GHSA-jfh8-c2jp-5v3q"}]}
@@ -519,6 +527,25 @@ Extra top-level keys: `trigger_conditions`, `supported_platforms`,
 | Prompt | `vulnerability_assessment` | `cve_id` |
 | Prompt | `exploit_research` | `cve_id`, `focus_area` |
 | Prompt | `bug_bounty_analysis` | `cve_id` |
+
+## Golden examples (3)
+
+### 1) PoC-only (Log4Shell)
+Ask: “Find GitHub PoCs for CVE-2021-44228.”
+→ `find_github_pocs("CVE-2021-44228")`. Prefer high `trust_score` / `labels` containing
+`poc`; skip `index`/`writeup`. Read `sources` (and `detail`) before saying none exist.
+
+### 2) Package / dual IDs (lodash-style)
+Ask: “What CVEs hit npm lodash and what do I upgrade to?”
+→ `discover_package_cves(ecosystem="npm", name="lodash", version="…")`.
+Use `canonical_cve` + `aliases` so GHSA and CVE are one finding; recommend a
+`fixed_versions` entry on the user’s major line. Do **not** use `discover_product_cves`.
+
+### 3) Full triage report
+Ask: “Prioritize these CVEs for patching.”
+→ `generate_json_report("CVE-A,CVE-B,CVE-C")`. Sort by each entry’s `triage.priority`
+and `reasons` (KEV / EPSS / exploit counts). PoC-only questions still go to
+`find_github_pocs`.
 
 ## Error envelope
 

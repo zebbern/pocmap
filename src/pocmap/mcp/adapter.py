@@ -23,6 +23,7 @@ from pocmap.utils.http import (
     categorize_exception,
     is_programming_error,
 )
+from pocmap.utils.triage import build_cve_triage
 
 logger = logging.getLogger("pocmap-mcp")
 
@@ -181,14 +182,21 @@ class ServiceAdapter:
         return None
 
     def find_metasploit_module(self, cve_id: str, limit: int = 1) -> dict[str, Any] | None:
-        """Find Metasploit module."""
+        """Find the best-ranked Metasploit module (first of :meth:`find_metasploit_modules`)."""
+        modules = self.find_metasploit_modules(cve_id, limit=limit)
+        return modules[0] if modules else None
+
+    def find_metasploit_modules(self, cve_id: str, limit: int = 1) -> list[dict[str, Any]]:
+        """Find Metasploit modules (all matches up to *limit*, best rank first)."""
         try:
-            return self._find_db_exploit(cve_id, ExploitSource.METASPLOIT, limit)
+            exploits = self._exploit.find_db_exploits(cve_id)
+            matching = [e for e in exploits if e.source == ExploitSource.METASPLOIT]
+            return [self._normalize_exploit(e) for e in matching[: max(limit, 1)]]
         except Exception as e:
             if is_programming_error(e):
                 raise
             logger.warning(f"Metasploit search failed: {e}")
-            return None
+            return []
 
     def find_exploitdb_entry(self, cve_id: str, limit: int = 1) -> dict[str, Any] | None:
         """Find ExploitDB entry."""
@@ -322,6 +330,7 @@ class ServiceAdapter:
                 sort=sort,
                 limit=limit,
             )
+            filter_stats = getattr(self._recent, "last_filter_stats", None) or {}
             return {
                 "success": True,
                 "total": len(results),
@@ -336,6 +345,7 @@ class ServiceAdapter:
                     "sort": sort,
                     "limit": limit,
                 },
+                "filter_stats": filter_stats,
                 "cves": [self._normalize_recent_result(r) for r in results],
             }
         except Exception as e:
@@ -384,12 +394,27 @@ class ServiceAdapter:
                 "detail": f"Exploit collection failed ({type(e).__name__})",
             }]
 
+        labs = self.find_labs(cve_id)
+        bb_reports = self.find_bug_bounty_reports(cve_id)
+        # Deepen the CVE-only triage with exploit/lab/bb counts for reports.
+        triage = build_cve_triage(
+            severity=((cve_info.get("cvss") or {}).get("severity") if isinstance(cve_info, dict) else None),
+            epss_score=cve_info.get("epss_score") if isinstance(cve_info, dict) else None,
+            kev_status=bool(cve_info.get("kev_status")) if isinstance(cve_info, dict) else False,
+            has_poc=bool(exploits),
+            exploit_count=len(exploits),
+            lab_count=len(labs),
+            bb_count=len(bb_reports),
+        )
+        if isinstance(cve_info, dict):
+            cve_info = {**cve_info, "triage": triage}
         return {
             "cve_info": cve_info,
             "exploits": exploits,
-            "labs": self.find_labs(cve_id),
-            "bb_reports": self.find_bug_bounty_reports(cve_id),
+            "labs": labs,
+            "bb_reports": bb_reports,
             "sources": sources,
+            "triage": triage,
         }, None
 
     def generate_json_report(self, cve_ids: list[str]) -> dict[str, Any]:
@@ -539,9 +564,11 @@ class ServiceAdapter:
         the model stores 0-100.
         """
         epss = getattr(vuln, "epss", None)
+        cve_ids = list(vuln.cve_ids)
         return {
             "id": vuln.id,
-            "cve_ids": list(vuln.cve_ids),
+            "canonical_cve": cve_ids[0] if cve_ids else None,
+            "cve_ids": cve_ids,
             "aliases": list(vuln.aliases),
             "summary": vuln.summary,
             "severity": ServiceAdapter._enum_val(vuln.severity, "UNKNOWN"),
@@ -629,7 +656,7 @@ class ServiceAdapter:
             if getattr(ap, "vendor", None) or getattr(ap, "product", None)
         ]
 
-        return {
+        payload = {
             "id": cve_id,
             "description": getattr(info, "description", None),
             "cvss": cvss_data,
@@ -643,6 +670,12 @@ class ServiceAdapter:
             "publication_date": getattr(info, "publication_date", None),
             "state": ServiceAdapter._enum_val(getattr(info, "state", "UNKNOWN"), "UNKNOWN"),
         }
+        payload["triage"] = build_cve_triage(
+            severity=cvss_data.get("severity"),
+            epss_score=epss,
+            kev_status=kev,
+        )
+        return payload
 
     @staticmethod
     def _normalize_exploit(e: Any) -> dict[str, Any]:
@@ -663,6 +696,12 @@ class ServiceAdapter:
             # (msfconsole / searchsploit / nuclei invocations); None for GitHub
             # PoCs, which have no canonical run command.
             "command": getattr(e, "command", None),
+            "labels": list(getattr(e, "labels", None) or []),
+            "last_commit": getattr(e, "last_commit", None),
+            "trust_score": getattr(e, "trust_score", None),
+            "module_path": getattr(e, "module_path", None),
+            "module_type": getattr(e, "module_type", None),
+            "platform": getattr(e, "platform", None),
         }
 
     @staticmethod
@@ -682,11 +721,15 @@ class ServiceAdapter:
         """Normalize LabEnvironment to dict."""
         if isinstance(lab, dict):
             return lab
-        return {
+        payload: dict[str, Any] = {
             "platform": ServiceAdapter._enum_val(getattr(lab, "platform", "unknown"), "unknown"),
             "name": getattr(lab, "name", "Unknown"),
             "url": getattr(lab, "url", ""),
         }
+        setup = getattr(lab, "setup_instructions", None)
+        if setup:
+            payload["setup_instructions"] = setup
+        return payload
 
     @staticmethod
     def _normalize_cpe(c: Any) -> dict[str, Any]:

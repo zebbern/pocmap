@@ -23,6 +23,7 @@ from pocmap.config import (
 )
 from pocmap.models import Exploit, ExploitSource
 from pocmap.utils.http import HTTPClient, HTTPError, OfflineError, RateLimitError
+from pocmap.utils.poc_labels import classify_poc_labels, trust_score
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,9 @@ class GitHubClient:
     ) -> None:
         self.api_token = api_token or settings.github_api_token
         self._client = http_client or HTTPClient(headers=settings.github_headers)
+        # Short, agent-quotable note about the last ``search_pocs`` path taken
+        # (indexes vs Search fallback). Consumed by ExploitService status.
+        self.last_search_detail: str = ""
 
     def search_pocs(self, cve_id: str, limit: int | None = None) -> list[Exploit]:
         """Search for PoCs on GitHub via Nomi-sec, TrickestCVE, and Search fallback.
@@ -189,6 +193,7 @@ class GitHubClient:
         """
         cve_id = cve_id.upper()
         cve_year = cve_id.split("-")[1]
+        self.last_search_detail = ""
 
         # Nomi-sec entries carry stars/forks inline, so they seed the ranking.
         candidates: dict[str, Exploit] = {}
@@ -196,14 +201,20 @@ class GitHubClient:
             url = repo.get("html_url", "")
             if not url or _is_aggregator(url):
                 continue
+            title = repo.get("description") or "N/A"
+            stars = repo.get("stargazers_count", 0) or 0
+            forks = repo.get("forks_count", 0) or 0
+            labels = classify_poc_labels(title if title != "N/A" else None, url)
             candidates.setdefault(
                 _repo_key(url),
                 Exploit(
                     source=ExploitSource.GITHUB,
                     url=url,
-                    title=repo.get("description") or "N/A",
-                    stars=repo.get("stargazers_count", 0) or 0,
-                    forks=repo.get("forks_count", 0) or 0,
+                    title=title,
+                    stars=stars,
+                    forks=forks,
+                    labels=labels,
+                    trust_score=trust_score(stars=stars, forks=forks, labels=labels),
                 ),
             )
 
@@ -214,34 +225,59 @@ class GitHubClient:
             if key in candidates:
                 continue
             is_github = url.startswith("https://github.com/")
+            title = url.rstrip("/").rsplit("/", 1)[-1] if is_github else url
+            labels = classify_poc_labels(title, url)
             candidates[key] = Exploit(
                 source=ExploitSource.GITHUB if is_github else ExploitSource.OTHER,
                 url=url,
                 # No metadata from Trickest; the repo name is the best label
                 # available without spending an API call on it.
-                title=url.rstrip("/").rsplit("/", 1)[-1] if is_github else url,
+                title=title,
+                labels=labels,
+                trust_score=trust_score(labels=labels),
             )
 
+        used_search_fallback = False
         # Index lag: curated feeds often miss fresh / low-star PoC repos that
         # GitHub Search already knows about (e.g. CVE-YYYY-NNNNN-named repos).
         if not candidates:
+            used_search_fallback = True
             for repo in self._fetch_github_search(cve_id):
                 url = repo.get("html_url", "")
                 if not url or _is_aggregator(url):
                     continue
+                title = repo.get("description") or repo.get("full_name") or "N/A"
+                stars = repo.get("stargazers_count", 0) or 0
+                forks = repo.get("forks_count", 0) or 0
+                labels = classify_poc_labels(title if title != "N/A" else None, url)
                 candidates.setdefault(
                     _repo_key(url),
                     Exploit(
                         source=ExploitSource.GITHUB,
                         url=url,
-                        title=repo.get("description") or repo.get("full_name") or "N/A",
-                        stars=repo.get("stargazers_count", 0) or 0,
-                        forks=repo.get("forks_count", 0) or 0,
+                        title=title,
+                        stars=stars,
+                        forks=forks,
+                        labels=labels,
+                        trust_score=trust_score(stars=stars, forks=forks, labels=labels),
                     ),
                 )
 
+        if used_search_fallback:
+            self.last_search_detail = (
+                "Nomi-sec and TrickestCVE indexes empty; used GitHub Search API fallback"
+            )
+        elif candidates:
+            self.last_search_detail = "Results from Nomi-sec and/or TrickestCVE indexes"
+        else:
+            self.last_search_detail = (
+                "No PoC repositories found in indexes or GitHub Search"
+            )
+
         exploits = sorted(
-            candidates.values(), key=lambda x: (x.stars or 0, x.forks or 0), reverse=True
+            candidates.values(),
+            key=lambda x: (x.trust_score or 0.0, x.stars or 0, x.forks or 0),
+            reverse=True,
         )
         if limit is not None:
             exploits = exploits[:limit]
@@ -308,7 +344,7 @@ class GitHubClient:
         return items if isinstance(items, list) else []
 
     def _enrich(self, exploit: Exploit) -> Exploit:
-        """Fill in language (and any missing metadata) from the GitHub API."""
+        """Fill in language, freshness, labels, and trust from the GitHub API."""
         if exploit.source is not ExploitSource.GITHUB:
             return exploit
         if not exploit.url.startswith("https://github.com/"):
@@ -320,6 +356,14 @@ class GitHubClient:
             # Looked up and genuinely has no metadata (404 / deleted repo), as
             # opposed to never looked up — which stays ``None``.
             exploit.language = "N/A"
+            if not exploit.labels:
+                exploit.labels = classify_poc_labels(exploit.title, exploit.url)
+            exploit.trust_score = trust_score(
+                stars=exploit.stars,
+                forks=exploit.forks,
+                last_commit=exploit.last_commit,
+                labels=exploit.labels,
+            )
             return exploit
 
         exploit.language = info.get("language") or "N/A"
@@ -331,6 +375,16 @@ class GitHubClient:
             exploit.stars = info.get("stargazers_count") or 0
         if info.get("forks_count") is not None:
             exploit.forks = info.get("forks_count") or 0
+        pushed = info.get("pushed_at")
+        if isinstance(pushed, str) and pushed:
+            exploit.last_commit = pushed
+        exploit.labels = classify_poc_labels(exploit.title, exploit.url)
+        exploit.trust_score = trust_score(
+            stars=exploit.stars,
+            forks=exploit.forks,
+            last_commit=exploit.last_commit,
+            labels=exploit.labels,
+        )
         return exploit
 
     def _parse_trickest_md(self, text: str) -> list[str]:

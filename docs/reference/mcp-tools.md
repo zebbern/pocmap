@@ -14,7 +14,7 @@ Auto-generated from the registered PocMap MCP server (`python scripts/generate_m
 | `find_bug_bounty_reports` | Find bug bounty reports and write-ups for a CVE. |
 | `find_exploitdb_entry` | Find an ExploitDB entry for a CVE. |
 | `find_github_pocs` | FIRST CHOICE when the user only wants a PoC, exploit code, or GitHub repos for a known CVE — do not open with generate_json_report for that ask. |
-| `find_metasploit_module` | Find a Metasploit Framework module for a CVE. |
+| `find_metasploit_module` | Find Metasploit Framework module(s) for a CVE. |
 | `find_nuclei_template` | Find a Nuclei vulnerability scanner template for a CVE. |
 | `find_practice_labs` | Find CTF (Capture The Flag) labs, vulnerable machines, and practice environments for a CVE. |
 | `find_recent_exploits` | Find recently published CVEs with exploit and PoC intelligence. |
@@ -236,7 +236,7 @@ Find an ExploitDB entry for a CVE. ExploitDB is the ultimate archive of exploit 
 
 ### `find_github_pocs`
 
-FIRST CHOICE when the user only wants a PoC, exploit code, or GitHub repos for a known CVE — do not open with generate_json_report for that ask. Searches Nomi-sec + TrickestCVE; when both are empty, falls back to GitHub Search so fresh PoC repos are not missed. Also promotes PoC-like URLs from the CVE's own references. Returns titles, URLs, languages, stars, forks, plus a sources health block (ok/empty/rate_limited/error). Sorted by stars. Use generate_json_report only when they also need severity/KEV/labs/bounty in one shot.
+FIRST CHOICE when the user only wants a PoC, exploit code, or GitHub repos for a known CVE — do not open with generate_json_report for that ask. Searches Nomi-sec + TrickestCVE; when both are empty, falls back to GitHub Search so fresh PoC repos are not missed (sources.detail explains which path ran). Also promotes PoC-like URLs from the CVE's own references. Returns titles, URLs, languages, stars, forks, labels (scanner/poc/writeup/index/vulnerable-app), last_commit, trust_score, plus a sources health block (ok/empty/rate_limited/error). Cold start / first call can take 10–30s. Use generate_json_report only when they also need severity/KEV/labs/bounty.
 
 **Input schema**
 
@@ -265,7 +265,7 @@ FIRST CHOICE when the user only wants a PoC, exploit code, or GitHub repos for a
 
 ### `find_metasploit_module`
 
-Find a Metasploit Framework module for a CVE. Metasploit is a widely-used penetration testing framework. If a module exists, it means the vulnerability can be reliably exploited using Metasploit's standardized interface. Returns the module title, source URL, and msfconsole command. Use this tool when assessing whether automated exploitation is possible, or when planning penetration tests. The existence of a Metasploit module indicates mature exploit code.
+Find Metasploit Framework module(s) for a CVE. A CVE often has more than one module (scanner + exploit, or per-target variants) — raise limit to see them all. Each module includes title, module_path, module_type, platform, rank, URL, and msfconsole command. Use when assessing automated exploitation or planning penetration tests.
 
 **Input schema**
 
@@ -347,7 +347,7 @@ Find CTF (Capture The Flag) labs, vulnerable machines, and practice environments
 
 ### `find_recent_exploits`
 
-Find recently published CVEs with exploit and PoC intelligence. Scans the NVD for newly published vulnerabilities within a configurable time window, then enriches each CVE with CVSS scoring, CISA KEV status, and PoC availability from GitHub. Results can be filtered by severity, KEV status, minimum EPSS score, and PoC availability. Use this tool to stay on top of emerging threats, monitor vulnerability disclosures, or build daily/weekly security briefings. Time window can be specified as a relative string (e.g., '24h', '7d') or as explicit date range.
+Find recently published CVEs with exploit and PoC intelligence. Scans the NVD for newly published vulnerabilities within a configurable time window, then enriches each CVE with CVSS scoring, CISA KEV status, and PoC availability from GitHub. Results can be filtered by severity, KEV status, minimum EPSS score, and PoC availability. Response includes filter_stats (fetched/after_severity/after_epss/after_poc/returned and poc_check ok/empty/error/rate_limited counts) so empty only_with_poc results are explainable. Each cve_info includes a triage summary. Cold start / first call can take 10–30s. Use for emerging threats, disclosure monitoring, or daily/weekly briefings.
 
 **Input schema**
 
@@ -457,7 +457,7 @@ Generate a comprehensive HTML vulnerability report for one or more CVEs. The rep
 
 ### `generate_json_report`
 
-Full assessment for one or more known CVE IDs in a single call: description, CVSS, EPSS, KEV, exploits across GitHub/Metasploit/ExploitDB/Nuclei (plus plugins), practice labs, and bug bounty reports. Prefer this when the user wants a complete picture, prioritization, or compare/prioritize several CVEs — not when they only asked for a PoC or exploit repo (use find_github_pocs or the matching DB tool instead; those are faster and more focused). Beats calling lookup_cve + every exploit/lab/bounty tool separately for a full write-up. Each entry includes a sources block (ok/empty/rate_limited/error) so an empty exploit list is never a silent negative. Accepts comma-separated IDs. Also suitable for automation, CI/CD, and dashboards.
+Full assessment for one or more known CVE IDs in a single call: description, CVSS, EPSS, KEV, exploits across GitHub/Metasploit/ExploitDB/Nuclei (plus plugins), practice labs, and bug bounty reports. Each entry includes triage (priority/reasons/next_actions) plus a sources block (ok/empty/rate_limited/error) so an empty exploit list is never a silent negative. Prefer this for a complete picture or multi-CVE prioritization — not when they only asked for a PoC (use find_github_pocs). Cold start / first call can take 10–30s. Accepts comma-separated IDs. Suitable for automation, CI/CD, and dashboards.
 
 **Input schema**
 

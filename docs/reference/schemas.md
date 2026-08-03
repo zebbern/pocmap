@@ -392,7 +392,7 @@ MCP tools return plain objects under an open `{"type": "object"}` output schema 
       "type": "string"
     }
   },
-  "description": "A single exploit / PoC entry.\n\nAttributes:\n    source: Where the exploit was found.\n    url: Direct URL to the exploit code or repository.\n    title: Human-readable title or description.\n    language: Primary programming language (if known).\n    stars: GitHub star count (if applicable).\n    forks: GitHub fork count (if applicable).\n    rank: Metasploit exploit rank (if applicable).",
+  "description": "A single exploit / PoC entry.\n\nAttributes:\n    source: Where the exploit was found.\n    url: Direct URL to the exploit code or repository.\n    title: Human-readable title or description.\n    language: Primary programming language (if known).\n    stars: GitHub star count (if applicable).\n    forks: GitHub fork count (if applicable).\n    rank: Metasploit exploit rank (if applicable).\n    labels: Heuristic quality labels (scanner/poc/writeup/\u2026).\n    last_commit: ISO timestamp of last push (GitHub), when known.\n    trust_score: Heuristic trust in ``[0.0, 1.0]``.\n    module_path: Metasploit module filesystem path, when known.\n    module_type: Metasploit module type (exploit/auxiliary/\u2026), when known.\n    platform: Metasploit target platform list/string, when known.",
   "properties": {
     "source": {
       "$ref": "#/$defs/ExploitSource",
@@ -481,6 +481,81 @@ MCP tools return plain objects under an open `{"type": "object"}` output schema 
       "default": null,
       "description": "CLI command to run the exploit (e.g., msfconsole command)",
       "title": "Command"
+    },
+    "labels": {
+      "description": "Heuristic PoC quality labels (scanner, poc, writeup, \u2026)",
+      "items": {
+        "type": "string"
+      },
+      "title": "Labels",
+      "type": "array"
+    },
+    "last_commit": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Last repository push time (ISO-8601), when known",
+      "title": "Last Commit"
+    },
+    "trust_score": {
+      "anyOf": [
+        {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Heuristic trust score in [0.0, 1.0]",
+      "title": "Trust Score"
+    },
+    "module_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Metasploit module path on disk, when known",
+      "title": "Module Path"
+    },
+    "module_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Metasploit module type (exploit, auxiliary, \u2026)",
+      "title": "Module Type"
+    },
+    "platform": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Metasploit platform target(s), when known",
+      "title": "Platform"
     }
   },
   "required": [
@@ -1076,7 +1151,7 @@ MCP tools return plain objects under an open `{"type": "object"}` output schema 
       "type": "string"
     },
     "Exploit": {
-      "description": "A single exploit / PoC entry.\n\nAttributes:\n    source: Where the exploit was found.\n    url: Direct URL to the exploit code or repository.\n    title: Human-readable title or description.\n    language: Primary programming language (if known).\n    stars: GitHub star count (if applicable).\n    forks: GitHub fork count (if applicable).\n    rank: Metasploit exploit rank (if applicable).",
+      "description": "A single exploit / PoC entry.\n\nAttributes:\n    source: Where the exploit was found.\n    url: Direct URL to the exploit code or repository.\n    title: Human-readable title or description.\n    language: Primary programming language (if known).\n    stars: GitHub star count (if applicable).\n    forks: GitHub fork count (if applicable).\n    rank: Metasploit exploit rank (if applicable).\n    labels: Heuristic quality labels (scanner/poc/writeup/\u2026).\n    last_commit: ISO timestamp of last push (GitHub), when known.\n    trust_score: Heuristic trust in ``[0.0, 1.0]``.\n    module_path: Metasploit module filesystem path, when known.\n    module_type: Metasploit module type (exploit/auxiliary/\u2026), when known.\n    platform: Metasploit target platform list/string, when known.",
       "properties": {
         "source": {
           "$ref": "#/$defs/ExploitSource",
@@ -1165,6 +1240,81 @@ MCP tools return plain objects under an open `{"type": "object"}` output schema 
           "default": null,
           "description": "CLI command to run the exploit (e.g., msfconsole command)",
           "title": "Command"
+        },
+        "labels": {
+          "description": "Heuristic PoC quality labels (scanner, poc, writeup, \u2026)",
+          "items": {
+            "type": "string"
+          },
+          "title": "Labels",
+          "type": "array"
+        },
+        "last_commit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Last repository push time (ISO-8601), when known",
+          "title": "Last Commit"
+        },
+        "trust_score": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Heuristic trust score in [0.0, 1.0]",
+          "title": "Trust Score"
+        },
+        "module_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Metasploit module path on disk, when known",
+          "title": "Module Path"
+        },
+        "module_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Metasploit module type (exploit, auxiliary, \u2026)",
+          "title": "Module Type"
+        },
+        "platform": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Metasploit platform target(s), when known",
+          "title": "Platform"
         }
       },
       "required": [

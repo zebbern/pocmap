@@ -34,6 +34,7 @@ from pocmap.utils.http import (
     ValidationError,
     is_programming_error,
 )
+from pocmap.utils.product_fallback import infer_vendor_product
 from pocmap.utils.validators import validate_cve_id as _validate_cve_id
 
 logger = logging.getLogger(__name__)
@@ -346,6 +347,27 @@ class CVEService:
         if vendor is None and product is None and affected:
             vendor, product = _pick_primary_affected(affected, description)
             affected = _prioritize_affected(affected, vendor, product)
+
+        # Fresh / thin advisories often lack CPE and CNA product names. Infer
+        # from description (and reference name/tags already on the record)
+        # without inventing CPE strings or calling GHSA/WPScan.
+        if vendor is None and product is None:
+            ref_titles: list[str] = []
+            for item in record.get("references") or []:
+                if not isinstance(item, dict):
+                    continue
+                for key in ("name", "title"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        ref_titles.append(value)
+                tags = item.get("tags")
+                if isinstance(tags, list):
+                    ref_titles.extend(str(t) for t in tags if t)
+            inferred_v, inferred_p = infer_vendor_product(
+                description, reference_titles=ref_titles
+            )
+            vendor = inferred_v
+            product = inferred_p
 
         # Get EPSS score
         epss = self._cveorg.get_epss(cve_id)

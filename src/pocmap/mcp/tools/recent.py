@@ -16,9 +16,10 @@ from pocmap.mcp.server import _svc
         "Scans the NVD for newly published vulnerabilities within a configurable time window, "
         "then enriches each CVE with CVSS scoring, CISA KEV status, and PoC availability from GitHub. "
         "Results can be filtered by severity, KEV status, minimum EPSS score, and PoC availability. "
-        "Use this tool to stay on top of emerging threats, monitor vulnerability disclosures, "
-        "or build daily/weekly security briefings. Time window can be specified as a relative "
-        "string (e.g., '24h', '7d') or as explicit date range."
+        "Response includes filter_stats (fetched/after_severity/after_epss/after_poc/returned and "
+        "poc_check ok/empty/error/rate_limited counts) so empty only_with_poc results are explainable. "
+        "Each cve_info includes a triage summary. Cold start / first call can take 10–30s. "
+        "Use for emerging threats, disclosure monitoring, or daily/weekly briefings."
     ),
 )
 def find_recent_exploits(
