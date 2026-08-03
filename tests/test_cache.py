@@ -219,6 +219,20 @@ def test_get_json_second_call_served_from_cache(client_with_cache, monkeypatch) 
     assert cache.info()["entries"] == 1
 
 
+def test_get_json_raises_on_401_error_body(client_with_cache, monkeypatch) -> None:
+    """GitHub-style 401 JSON must not parse as a successful empty payload."""
+    from pocmap.utils.http import HTTPError
+
+    client, _cache = client_with_cache
+    body = '{"message":"Bad credentials","status":"401"}'
+    transport = _CountingTransport(_FakeResponse(401, body))
+    monkeypatch.setattr(client._session, "get", transport)
+
+    with pytest.raises(HTTPError) as excinfo:
+        client.get_json("https://api.example/data")
+    assert excinfo.value.status_code == 401
+
+
 def test_get_text_second_call_served_from_cache(client_with_cache, monkeypatch) -> None:
     client, cache = client_with_cache
     transport = _CountingTransport(_FakeResponse(200, "plain body"))
@@ -307,14 +321,19 @@ def test_disabled_cache_always_fetches(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_non_200_responses_are_not_cached(client_with_cache, monkeypatch) -> None:
+    from pocmap.utils.http import HTTPError
+
     client, cache = client_with_cache
-    # A 500 that survives the (bypassed) retry layer: returned but never cached.
+    # A 500 that survives the (bypassed) retry layer: raised, never cached.
     transport = _CountingTransport(_FakeResponse(500, '{"err": true}'))
     monkeypatch.setattr(client._session, "get", transport)
 
-    client.get_json("https://api.example/data")
+    with pytest.raises(HTTPError) as excinfo:
+        client.get_json("https://api.example/data")
+    assert excinfo.value.status_code == 500
     assert cache.info()["entries"] == 0
-    client.get_json("https://api.example/data")
+    with pytest.raises(HTTPError):
+        client.get_json("https://api.example/data")
     assert transport.calls == 2  # nothing was cached, so it fetched again
 
 

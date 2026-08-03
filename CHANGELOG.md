@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-08-03
+
+### Fixed
+
+- **GitHub PoC false empties when MCP has a bad/expired `GITHUB_API_TOKEN`.**
+  Sending `Authorization` to `raw.githubusercontent.com` made Nomi-sec / TrickestCVE
+  return HTTP 404 for public index files; GitHub API 401 JSON was parsed as a
+  successful empty Search payload. Indexes now use unauthenticated raw headers,
+  `get_json` raises on non-2xx (except 404), and Search / repo metadata retry
+  once without credentials after HTTP 401. Proof case: Log4Shell / fresh CVEs
+  no longer report “indexes empty” solely because of a stale PAT.
+
 ## [2.8.0] - 2026-08-03
 
 Agent-facing exploit quality signals, Metasploit detail, recent filter explainability,

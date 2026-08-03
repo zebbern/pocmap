@@ -87,9 +87,17 @@ def test_offline_error_propagates() -> None:
 
 
 def test_http_error_falls_back_to_trickest_and_returns_empty() -> None:
-    """A Nomi-sec HTTPError falls back to TrickestCVE; empty fallback -> []."""
+    """A Nomi-sec HTTPError falls back to TrickestCVE; empty indexes + empty Search -> []."""
     http = MagicMock()
-    http.get_json.side_effect = HTTPError("nomi down", status_code=500)
+
+    def fake_get_json(url: str, **_: Any) -> Any:
+        if url.endswith(".json"):
+            raise HTTPError("nomi down", status_code=500)
+        if url.rstrip("/").endswith("/search/repositories"):
+            return {"total_count": 0, "items": []}
+        return {}
+
+    http.get_json.side_effect = fake_get_json
     http.get_text.return_value = ""
     client = GitHubClient(http_client=http)
 
@@ -353,6 +361,42 @@ def test_github_search_rate_limit_propagates_when_indexes_empty() -> None:
     )
     with pytest.raises(RateLimitError):
         client.search_pocs("CVE-2026-26832")
+
+
+def test_github_search_http_error_propagates_when_indexes_empty() -> None:
+    """Search failures must not degrade to an empty-PoC success."""
+    client, _http = _empty_index_client(
+        search_payload=HTTPError("search down", status_code=500)
+    )
+    with pytest.raises(HTTPError):
+        client.search_pocs("CVE-2026-26832")
+
+
+def test_github_search_retries_unauthenticated_after_401() -> None:
+    """A bad MCP PAT must not wipe public Search results."""
+    http = MagicMock()
+    calls: list[bool] = []
+
+    def fake_get_json(url: str, **kwargs: Any) -> Any:
+        if url.endswith(".json"):
+            return []
+        if url.rstrip("/").endswith("/search/repositories"):
+            headers = kwargs.get("headers") or {}
+            authorized = bool(headers.get("Authorization"))
+            calls.append(authorized)
+            if authorized:
+                raise HTTPError("Bad credentials", status_code=401)
+            return {"total_count": 1, "items": [_SEARCH_ITEM]}
+        return {}
+
+    http.get_json.side_effect = fake_get_json
+    http.get_text.return_value = ""
+    client = GitHubClient(api_token="ghp_stale", http_client=http)
+
+    result = client.search_pocs("CVE-2026-26832")
+
+    assert [ex.url for ex in result] == ["https://github.com/zebbernCVE/CVE-2026-26832"]
+    assert calls == [True, False]
 
 
 def test_github_search_filters_aggregator_hits() -> None:

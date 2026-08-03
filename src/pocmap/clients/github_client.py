@@ -57,6 +57,30 @@ _POC_NAME_RE = re.compile(r"(?i)(poc|exploit|vulnerability)")
 _SEARCH_PER_PAGE = 10
 
 
+def _raw_content_headers() -> dict[str, str]:
+    """Headers for ``raw.githubusercontent.com`` index files.
+
+    Never attach a GitHub ``Authorization`` token here. A Bearer (especially a
+    bad/expired PAT from MCP env) can make public raw files return HTTP 404
+    even though the same URL succeeds unauthenticated — which emptied Nomi-sec
+    / TrickestCVE and made famous CVEs look PoC-less.
+    """
+    return dict(settings.default_headers)
+
+
+def _github_api_headers(token: str | None = None) -> dict[str, str]:
+    """Headers for ``api.github.com`` (Search / repo metadata).
+
+    Uses the caller's token (``GitHubClient.api_token``) rather than only the
+    process-wide settings singleton, so tests and per-client tokens apply.
+    """
+    headers = dict(settings.default_headers)
+    headers["Accept"] = "application/vnd.github.v3+json"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def _is_aggregator(url: str) -> bool:
     """Whether *url* looks like a CVE index rather than a PoC."""
     if url in _FALSE_POSITIVE_REPOS:
@@ -157,7 +181,9 @@ class GitHubClient:
         http_client: HTTPClient | None = None,
     ) -> None:
         self.api_token = api_token or settings.github_api_token
-        self._client = http_client or HTTPClient(headers=settings.github_headers)
+        # Session defaults stay unauthenticated so raw index fetches never
+        # inherit a PAT. API calls pass :func:`_github_api_headers` explicitly.
+        self._client = http_client or HTTPClient(headers=settings.default_headers)
         # Short, agent-quotable note about the last ``search_pocs`` path taken
         # (indexes vs Search fallback). Consumed by ExploitService status.
         self.last_search_detail: str = ""
@@ -297,7 +323,7 @@ class GitHubClient:
         """Fetch the Nomi-sec PoC index entry for a CVE."""
         url = f"{NOMI_SEC_POC_BASE}/{cve_year}/{cve_id}.json"
         try:
-            data = self._client.get_json(url, headers=settings.github_headers)
+            data = self._client.get_json(url, headers=_raw_content_headers())
         except (RateLimitError, OfflineError):
             # Throttling / offline cache-miss must surface, never read as
             # "no PoCs found".
@@ -311,7 +337,7 @@ class GitHubClient:
         """Fetch and parse the TrickestCVE markdown page for a CVE."""
         url = f"{TRICKEST_CVE_BASE}/{cve_year}/{cve_id}.md"
         try:
-            text = self._client.get_text(url, headers=settings.github_headers)
+            text = self._client.get_text(url, headers=_raw_content_headers())
         except (RateLimitError, OfflineError):
             raise
         except HTTPError:
@@ -324,20 +350,39 @@ class GitHubClient:
 
         Used only when Nomi-sec and TrickestCVE produced no candidates.
         ``RateLimitError`` / ``OfflineError`` propagate so throttling is never
-        reported as "no PoCs found".
+        reported as "no PoCs found". A bad PAT (HTTP 401) retries once without
+        credentials so public Search still works for MCP configs with a stale
+        ``GITHUB_API_TOKEN``.
         """
         url = f"{GITHUB_API_BASE}/search/repositories"
+        params = {"q": cve_id, "per_page": _SEARCH_PER_PAGE}
         try:
             data = self._client.get_json(
                 url,
-                headers=settings.github_headers,
-                params={"q": cve_id, "per_page": _SEARCH_PER_PAGE},
+                headers=_github_api_headers(self.api_token),
+                params=params,
             )
         except (RateLimitError, OfflineError):
             raise
-        except HTTPError:
-            logger.debug("GitHub Search lookup failed for %s", cve_id)
-            return []
+        except HTTPError as exc:
+            if exc.status_code == 401 and self.api_token:
+                logger.warning(
+                    "GitHub API token rejected (401); retrying Search unauthenticated"
+                )
+                try:
+                    data = self._client.get_json(
+                        url,
+                        headers=_github_api_headers(None),
+                        params=params,
+                    )
+                except (RateLimitError, OfflineError):
+                    raise
+                except HTTPError:
+                    logger.debug("GitHub Search lookup failed for %s", cve_id)
+                    raise
+            else:
+                logger.debug("GitHub Search lookup failed for %s", cve_id)
+                raise
         if not isinstance(data, dict):
             return []
         items = data.get("items")
@@ -429,13 +474,28 @@ class GitHubClient:
         """
         url = f"{GITHUB_API_BASE}/repos/{full_name}"
         try:
-            data = self._client.get_json(url, headers=settings.github_headers)
+            data = self._client.get_json(url, headers=_github_api_headers(self.api_token))
             if isinstance(data, dict) and "html_url" in data:
                 return data
         except (RateLimitError, OfflineError):
             raise
         except HTTPError as exc:
             if exc.status_code == 404:
+                return None
+            # Stale MCP PAT: public repo metadata still works anonymously.
+            if exc.status_code == 401 and self.api_token:
+                try:
+                    data = self._client.get_json(
+                        url, headers=_github_api_headers(None)
+                    )
+                    if isinstance(data, dict) and "html_url" in data:
+                        return data
+                except (RateLimitError, OfflineError):
+                    raise
+                except HTTPError as retry_exc:
+                    if retry_exc.status_code == 404:
+                        return None
+                    logger.debug("GitHub API error for %s: %s", full_name, retry_exc)
                 return None
             logger.debug("GitHub API error for %s: %s", full_name, exc)
         return None
@@ -468,7 +528,7 @@ class GitHubClient:
         for branch in ("main", "master"):
             url = f"{GITHUB_RAW_BASE}/{repo_path}/refs/heads/{branch}/README.md"
             try:
-                text = self._client.get_text(url, headers=settings.github_headers)
+                text = self._client.get_text(url, headers=_raw_content_headers())
                 if text:
                     md = markdown(text)
                     soup = BeautifulSoup(md, "html.parser")

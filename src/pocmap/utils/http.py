@@ -747,13 +747,18 @@ class HTTPClient:
             url: Target URL.
             headers: Additional headers merged with defaults.
             params: URL query parameters.
-            default: Value to return if the response is not valid JSON.
+            default: Value returned on HTTP 404 or when a 2xx body is not valid JSON.
             timeout: Per-request timeout override (falls back to instance default).
             no_cache: When ``True``, bypass the cache entirely (no read, no write).
             **kwargs: Additional arguments passed to ``requests.get``.
 
         Returns:
-            Parsed JSON data, or *default* if parsing fails.
+            Parsed JSON data, or *default* on 404 / unparseable 2xx body.
+
+        Raises:
+            HTTPError: Non-2xx response other than 404 (including 401 error JSON).
+            RateLimitError: Upstream throttled the request.
+            OfflineError: Offline mode with no cached response.
         """
         cache = _get_cache()
         offline = self._is_offline()
@@ -781,12 +786,22 @@ class HTTPClient:
         resp = self.get(url, headers=headers, params=params, timeout=timeout, **kwargs)
         if resp.status_code == 404:
             return default
+        if not 200 <= resp.status_code < 300:
+            # Match post_json_cached: error JSON (e.g. GitHub 401
+            # ``{"message":"Bad credentials"}``) must not look like a successful
+            # empty search payload — that was a false "no PoCs" path.
+            detail = (resp.text or "").strip()[:200]
+            raise HTTPError(
+                f"HTTP {resp.status_code} from {url}: {detail}",
+                status_code=resp.status_code,
+                url=url,
+            )
         try:
             data = resp.json()
         except (ValueError, TypeError):
             logger.warning("Failed to parse JSON from %s", url)
             return default
-        if cache_key is not None and resp.status_code == 200:
+        if cache_key is not None:
             cache.set(cache_key, resp.text, status=resp.status_code)
         return data
 
